@@ -1,11 +1,16 @@
-# WhatsApp Conversion Tracker
+# WhatsApp CRM & Conversion Tracker
 
-Plataforma para conectar um número de WhatsApp (Cloud API oficial), capturar leads
-vindos de anúncios **Click to WhatsApp** com o identificador de clique, e disparar
-o evento de conversão de volta para a campanha.
+Plataforma para conectar um número de WhatsApp (Cloud API oficial) com dois fluxos
+que se encontram no mesmo funil:
 
-Destinos suportados: **Meta Conversions API**, **Google Ads (conversões offline)** e
-**webhook genérico** (n8n / Make / GTM server-side).
+- **Passivo** — captura leads vindos de anúncios **Click to WhatsApp** com o
+  identificador de clique e dispara o evento de conversão de volta para a campanha.
+- **Ativo** — varre potenciais clientes no Google Maps dentro de um raio (via Apify),
+  monta um CRM com os telefones e dispara a abordagem pelo WhatsApp. Quem responde
+  vira lead e entra no mesmo fluxo de conversão.
+
+Destinos de conversão suportados: **Meta Conversions API**, **Google Ads (conversões
+offline)** e **webhook genérico** (n8n / Make / GTM server-side).
 
 ## Como o rastreio funciona
 
@@ -66,6 +71,10 @@ Depois, na aba **Conexão** do painel:
 | Verify Token | você inventa; use o mesmo no painel da Meta |
 | App Secret | App → Settings → Basic |
 
+Para a prospecção, preencha também o **token do Apify** na aba *Prospecção → Conta Apify
+→ configurar* (Console do Apify → Settings → Integrations → API token). Se ele estiver no
+`.env` como `APIFY_TOKEN`, já vem preenchido.
+
 No painel da Meta (WhatsApp → Configuration → Webhook), cole a URL que o painel
 mostra (`https://SEU-NGROK/webhook/whatsapp`), o mesmo Verify Token, e **assine o
 campo `messages`**. Volte no painel e clique em *Testar conexão* e *Assinar webhooks*.
@@ -83,6 +92,81 @@ Em seguida, no detalhe do lead → *Disparar conversão*:
   *Events Manager → Test Events* e não entra na otimização da campanha.
 
 A aba **Conversões** mostra o log completo, com retry por destino que falhou.
+
+## Prospecção ativa (varredura por raio)
+
+```
+endereço ──geocode──▶ lat/lng + raio ──Apify──▶ Google Maps ──▶ prospects no CRM
+                                                                      │
+                                                        abordagem no WhatsApp
+                                                                      │
+                                              resposta ──▶ Contato ──▶ conversão
+```
+
+Aba **Prospecção**. Digite um endereço (o geocoder é o Nominatim/OpenStreetMap, sem
+chave), escolha o raio e os termos de busca. A área vai para o actor
+`compass/crawler-google-places` como um GeoJSON:
+
+```json
+{ "type": "Point", "coordinates": [-46.651918, -23.5648865], "radiusKm": 2 }
+```
+
+O Google raciocina por *viewport*, não por raio exato — então o import recalcula a
+distância de cada lugar com haversine e descarta o que passou do raio (com 10% de
+folga na borda). A distância fica visível em cada prospect.
+
+O que o import faz com cada lugar:
+
+| Etapa | Detalhe |
+|---|---|
+| Normaliza o telefone | `+55 11 3229-1681` → `+551132291681`; sem DDI, assume Brasil pelo DDD |
+| Classifica | **celular** vs **fixo** — mandar mensagem para fixo queima cota e reputação |
+| Deduplica | por `place_id` e por telefone canônico, atravessando varreduras diferentes |
+| Descarta | fechado permanentemente, ou fora do raio pedido |
+
+**Custo.** O Apify cobra por lugar encontrado. A varredura de 8 lugares que validou
+esse fluxo custou US$ 0,04 — o crédito gratuito de US$ 5/mês dá algumas centenas de
+prospects. Use *Quantidade por termo* como trava de gasto: cada termo é uma varredura
+independente.
+
+### Abordagem ativa
+
+Aba **CRM**: filtre (só celular, por varredura, por etapa), selecione e dispare.
+
+O disparo entra numa **fila** com intervalo configurável entre envios e limite diário —
+50 disparos com 8s de intervalo levariam minutos, e a requisição HTTP estouraria. O
+worker roda em background e retoma sozinho se o backend reiniciar. Cada tentativa grava
+request e response crus, igual ao log de conversões.
+
+⚠️ **Mensagem fria só entrega por template aprovado.** Texto livre da Cloud API só
+funciona dentro da janela de 24h depois de a pessoa te escrever. Para lista fria, crie
+um template (categoria *Marketing* ou *Utility*) no Gerenciador do WhatsApp e espere a
+aprovação — a aba lista os templates do seu WABA e marca quais estão aprovados. Isso é
+regra da Meta, não limitação daqui.
+
+Nas variáveis do template (e no texto livre) você pode usar `{nome}`, `{categoria}` e
+`{cidade}` — cada envio é preenchido com os dados daquele prospect.
+
+Trava de segurança: `outreach_enabled` começa **desligado**. Nada é enviado até você
+ligar em *CRM → Abordagem ativa → configurar*.
+
+### Como a resposta fecha o ciclo
+
+Quando o prospect responde, o webhook da Meta chega e o `ingest` liga a mensagem ao
+registro do CRM: o prospect ganha `contact_id`, vira etapa **Respondeu**, e o contato
+aparece na aba Leads pronto para disparar conversão.
+
+O match não é por igualdade de string: no Brasil o `wa_id` que a Meta entrega costuma
+vir **sem o nono dígito** (`5511988887777` → `551188887777`) enquanto o Maps devolve
+**com**. `phones.match_key` gera uma chave canônica sem o nono dígito e é por ela que os
+dois lados se reconhecem.
+
+### Etapas do CRM
+
+`novo` → `contatado` → `respondeu` → `qualificado` → `ganho` / `perdido`
+
+`contatado` é automático no envio; `respondeu` é automático na resposta. O resto é
+manual, e mover à mão nunca é rebaixado pelo automático.
 
 ## Configurar os destinos
 
@@ -110,14 +194,19 @@ e OAuth (client id/secret + refresh token). O upload usa `uploadClickConversions
 
 ```
 backend/app/
+  __init__.py             carrega o .env antes de qualquer submodulo
   main.py                 app + /api/health, /api/stats
-  ingest.py               webhook da Meta -> Contato + Mensagem (e o simulador)
+  ingest.py               webhook da Meta -> Contato + Mensagem, e liga a resposta ao CRM
   tracking.py             extração de ctwa_clid / gclid / wbraid / UTMs
+  phones.py               E.164, celular vs fixo, chave canônica do nono dígito
   settings_store.py       config env + override no banco, com mascaramento de segredo
-  models.py               contacts, messages, conversions, dispatches, webhook_logs
-  routers/                config, webhook, contacts, conversions
+  models.py               contacts, messages, conversions, dispatches, webhook_logs,
+                          prospect_searches, prospects, outreaches
+  routers/                config, webhook, contacts, conversions, prospecting
   services/
-    whatsapp_cloud.py     Graph API: status do número, subscribe, envio, assinatura
+    whatsapp_cloud.py     Graph API: status, subscribe, envio de texto e template
+    apify.py              dispara o actor, acompanha o run, normaliza o lugar
+    geo.py                geocode (Nominatim), haversine, área circular
     meta_capi.py          montagem e envio do evento CAPI
     google_ads.py         OAuth + uploadClickConversions
     generic_webhook.py    POST assinado
@@ -133,3 +222,13 @@ backend/app/
   caso contrário, e reentregar um payload quebrado não resolve nada. O erro fica no log.
 - Sem App Secret configurado, a validação de assinatura é ignorada. Preencha antes de
   expor isso em produção.
+- A sincronização da varredura é preguiçosa: as rotas de listagem conferem no Apify
+  qualquer busca ainda rodando e importam quando termina. Sem worker separado, nada fica
+  pendurado se o processo reiniciar — e ainda dá pra forçar com *sincronizar*.
+- Apagar uma varredura **não** apaga os prospects dela. A varredura é só a procedência;
+  os prospects são o CRM.
+- Número em ficha do Google Maps é dado de contato comercial público, mas abordagem em
+  massa tem consequência prática: reclamação de spam derruba a nota de qualidade do seu
+  número na Meta e pode limitar o envio. O intervalo entre envios, o limite diário e o
+  filtro de "só celular" existem para isso — mantenha o volume baixo e a mensagem
+  relevante.

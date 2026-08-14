@@ -121,11 +121,13 @@ export function Toggle({
       className="flex items-center gap-2.5 text-sm text-ink-100"
     >
       <span
-        className={`relative h-5 w-9 rounded-full transition-colors ${checked ? 'bg-wa-500' : 'bg-ink-700'}`}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? 'bg-wa-500' : 'bg-ink-700'
+        }`}
       >
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4.5' : 'translate-x-0.5'
+          className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0'
           }`}
         />
       </span>

@@ -3,10 +3,17 @@ const BASE = import.meta.env.VITE_API_URL ?? ''
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  })
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    })
+  } catch {
+    // fetch só rejeita quando a requisição nem sai: backend fora do ar, DNS, CORS
+    throw new ApiError(`Não consegui falar com a API (${path}). O backend está no ar?`)
+  }
+
   const text = await res.text()
   let body: unknown = null
   try {
@@ -15,6 +22,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     body = text
   }
   if (!res.ok) {
+    // 404 numa rota da API quase sempre é container servindo código antigo — o
+    // "Not Found" cru não diz isso pra ninguém.
+    if (res.status === 404) {
+      throw new ApiError(
+        `A rota ${path} não existe nesse backend (404). Se você acabou de atualizar o código, ` +
+          'rode `docker compose up --build -d` e recarregue a página com Cmd+Shift+R.',
+      )
+    }
     const detail =
       body && typeof body === 'object' && 'detail' in body
         ? String((body as { detail: unknown }).detail)
