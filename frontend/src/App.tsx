@@ -3,12 +3,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type Stats } from './api'
 import Connection from './tabs/Connection'
 import Conversions from './tabs/Conversions'
+import Crm from './tabs/Crm'
 import Destinations from './tabs/Destinations'
 import Leads from './tabs/Leads'
 import Manual from './tabs/Manual'
+import Prospecting from './tabs/Prospecting'
 
 const TABS = [
   { id: 'connection', label: 'Conexão' },
+  { id: 'prospecting', label: 'Prospecção' },
+  { id: 'crm', label: 'CRM' },
   { id: 'leads', label: 'Leads' },
   { id: 'conversions', label: 'Conversões' },
   { id: 'destinations', label: 'Destinos' },
@@ -44,18 +48,20 @@ export default function App() {
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-end justify-between gap-6 px-6 py-5">
           <div>
             <h1 className="text-lg font-semibold tracking-tight">
-              WhatsApp <span className="text-wa-500">Conversion Tracker</span>
+              WhatsApp <span className="text-wa-500">CRM & Conversion Tracker</span>
             </h1>
             <p className="mt-0.5 text-xs text-ink-500">
-              Click to WhatsApp → ctwa_clid → evento de conversão na campanha
+              Varredura por raio → abordagem ativa → resposta no WhatsApp → conversão na campanha
             </p>
           </div>
           {stats && (
             <div className="flex flex-wrap gap-7">
+              <Stat label="Prospects" value={stats.prospects} />
+              <Stat label="Abordados" value={stats.outreach_sent} />
+              <Stat label="Responderam" value={stats.prospects_replied} accent />
               <Stat label="Leads" value={stats.contacts} />
               <Stat label="Com atribuição" value={stats.attributed_contacts} accent />
               <Stat label="Conversões" value={stats.conversions} />
-              <Stat label="Envios OK" value={stats.dispatches.ok ?? 0} />
               <Stat label="Falhas" value={stats.dispatches.error ?? 0} />
             </div>
           )}
@@ -79,6 +85,8 @@ export default function App() {
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
         {tab === 'connection' && <Connection onChanged={refresh} />}
+        {tab === 'prospecting' && <Prospecting onChanged={refresh} />}
+        {tab === 'crm' && <Crm onChanged={refresh} />}
         {tab === 'leads' && <Leads onChanged={refresh} />}
         {tab === 'conversions' && <Conversions onChanged={refresh} />}
         {tab === 'destinations' && <Destinations onChanged={refresh} />}

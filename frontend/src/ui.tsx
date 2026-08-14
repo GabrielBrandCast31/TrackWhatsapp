@@ -87,6 +87,24 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
+export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className="w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 focus:border-wa-500 focus:outline-none"
+    />
+  )
+}
+
+export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className="w-full resize-y rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500 focus:border-wa-500 focus:outline-none"
+    />
+  )
+}
+
 export function Toggle({
   checked,
   onChange,

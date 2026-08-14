@@ -13,10 +13,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
 from app.db import SessionLocal, init_db
-from app.models import Contact, Conversion, Dispatch
+from app.models import Contact, Conversion, Dispatch, Outreach, Prospect
 from app.routers import config as config_router
 from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
+from app.routers import prospecting as prospecting_router
 from app.routers import webhook as webhook_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -34,12 +35,21 @@ app.add_middleware(
 app.include_router(config_router.router)
 app.include_router(contacts_router.router)
 app.include_router(conversions_router.router)
+app.include_router(prospecting_router.router)
 app.include_router(webhook_router.router)
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     await init_db()
+    # fila de abordagem que sobrou de um restart volta a andar sozinha
+    async with SessionLocal() as session:
+        pending = (
+            await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "queued"))
+        ).scalar_one()
+    if pending:
+        logging.getLogger(__name__).info("retomando %s abordagem(ns) na fila", pending)
+        prospecting_router.start_queue_worker()
 
 
 @app.get("/api/health")
@@ -67,9 +77,19 @@ async def stats():
                 await session.execute(select(Dispatch.status, func.count()).group_by(Dispatch.status))
             ).all()
         )
+        total_prospects = (await session.execute(select(func.count(Prospect.id)))).scalar_one()
+        outreach_sent = (
+            await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "sent"))
+        ).scalar_one()
+        replied = (
+            await session.execute(select(func.count(Prospect.id)).where(Prospect.replied_at.is_not(None)))
+        ).scalar_one()
     return {
         "contacts": total_contacts,
         "attributed_contacts": attributed,
         "conversions": total_conversions,
         "dispatches": by_status,
+        "prospects": total_prospects,
+        "outreach_sent": outreach_sent,
+        "prospects_replied": replied,
     }

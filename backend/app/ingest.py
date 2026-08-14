@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Contact, Message, WebhookLog
+from app import phones
+from app.models import Contact, Message, Prospect, WebhookLog
 from app.tracking import extract, to_e164
 
 _ATTRIBUTION_FIELDS = (
@@ -85,9 +86,45 @@ async def _upsert_contact(
     return contact, created
 
 
+async def _link_prospect(session: AsyncSession, contact: Contact) -> int | None:
+    """Se quem mandou a mensagem foi alguem que a gente abordou, fecha o ciclo do CRM.
+
+    O wa_id brasileiro chega sem o nono digito e o Google Maps devolve com — por isso
+    o match e por chave canonica (`phones.match_key`), nao por igualdade de string.
+    """
+    key = phones.match_key(contact.wa_id)
+    if not key:
+        return None
+
+    # os 8 ultimos digitos nao mudam com o nono digito — filtram no banco antes
+    # de a comparacao canonica confirmar o par.
+    candidates = (
+        (
+            await session.execute(
+                select(Prospect)
+                .where(Prospect.phone_e164.like(f"%{key[-8:]}"))
+                .where(Prospect.contact_id.is_(None) | (Prospect.contact_id == contact.id))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for prospect in candidates:
+        if phones.match_key(prospect.phone_e164) != key:
+            continue
+        prospect.contact_id = contact.id
+        if prospect.replied_at is None:
+            prospect.replied_at = datetime.now(timezone.utc)
+        if prospect.stage in ("novo", "contatado"):
+            prospect.stage = "respondeu"
+        return prospect.id
+    return None
+
+
 async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
     """Processa um POST do webhook. Devolve um resumo do que entrou."""
     contacts_touched: list[int] = []
+    prospects_replied: list[int] = []
     new_contacts = 0
     messages_saved = 0
     statuses = 0
@@ -119,6 +156,10 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
                 if not contact.first_message and text:
                     contact.first_message = text
 
+                prospect_id = await _link_prospect(session, contact)
+                if prospect_id is not None:
+                    prospects_replied.append(prospect_id)
+
                 wamid = message.get("id")
                 if wamid:
                     dup = await session.execute(select(Message.id).where(Message.wamid == wamid))
@@ -144,6 +185,8 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
         if (messages_saved or new_contacts or statuses)
         else "payload sem mensagens"
     )
+    if prospects_replied:
+        summary += f", {len(set(prospects_replied))} prospect(s) respondeu"
     session.add(WebhookLog(payload=payload, summary=summary))
     await session.commit()
 
@@ -152,6 +195,7 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
         "new_contacts": new_contacts,
         "statuses": statuses,
         "contact_ids": sorted(set(contacts_touched)),
+        "prospect_ids": sorted(set(prospects_replied)),
         "summary": summary,
     }
 

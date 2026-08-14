@@ -100,6 +100,184 @@ export type Stats = {
   attributed_contacts: number
   conversions: number
   dispatches: Record<string, number>
+  prospects: number
+  outreach_sent: number
+  prospects_replied: number
+}
+
+// --- CRM de prospecção ---
+
+export const STAGES = ['novo', 'contatado', 'respondeu', 'qualificado', 'ganho', 'perdido'] as const
+export type Stage = (typeof STAGES)[number]
+
+export const STAGE_LABEL: Record<Stage, string> = {
+  novo: 'Novo',
+  contatado: 'Contatado',
+  respondeu: 'Respondeu',
+  qualificado: 'Qualificado',
+  ganho: 'Ganho',
+  perdido: 'Perdido',
+}
+
+export type GeoResult = { label: string; lat: number; lng: number; kind: string | null }
+
+export type ProspectSearch = {
+  id: number
+  label: string
+  terms: string[]
+  center: { lat: number; lng: number }
+  radius_km: number
+  location_label: string | null
+  max_per_term: number
+  actor: string
+  apify_run_id: string | null
+  dataset_id: string | null
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  imported: boolean
+  error: string | null
+  items_found: number
+  prospects_new: number
+  prospects_dupe: number
+  prospects_skipped: number
+  cost_usd: number | null
+  apify_input: Record<string, unknown>
+  created_at: string
+  finished_at: string | null
+  run_url: string | null
+}
+
+export type Outreach = {
+  id: number
+  prospect_id: number
+  prospect_name?: string | null
+  kind: 'template' | 'text'
+  template_name: string | null
+  template_language: string | null
+  body_preview: string | null
+  to_phone: string | null
+  wamid: string | null
+  status: 'queued' | 'sent' | 'failed' | 'skipped'
+  http_status: number | null
+  request_payload: Record<string, unknown>
+  response_body: Record<string, unknown>
+  error: string | null
+  created_at: string
+  sent_at: string | null
+}
+
+export type Prospect = {
+  id: number
+  search_id: number | null
+  place_id: string | null
+  name: string
+  category: string | null
+  address: string | null
+  city: string | null
+  state: string | null
+  phone_e164: string | null
+  phone_raw: string | null
+  phone_kind: 'mobile' | 'landline' | 'unknown' | null
+  website: string | null
+  email: string | null
+  rating: number | null
+  reviews_count: number | null
+  lat: number | null
+  lng: number | null
+  distance_km: number | null
+  maps_url: string | null
+  stage: Stage
+  note: string | null
+  contact_id: number | null
+  last_outreach_at: string | null
+  replied_at: string | null
+  created_at: string
+}
+
+export type ProspectDetail = Prospect & {
+  outreaches: Outreach[]
+  raw: Record<string, unknown>
+}
+
+export type Pipeline = {
+  stages: Record<Stage, number>
+  total: number
+  with_mobile: number
+  outreach: { sent: number; queued: number; failed: number }
+  sent_today: number
+}
+
+export type ApifyAccount = {
+  configured: boolean
+  ok: boolean
+  username?: string
+  email?: string
+  plan?: string
+  monthly_credits_usd?: number
+  error?: string
+}
+
+export type WaTemplate = {
+  name: string
+  language: string
+  status: string
+  category: string
+  body: string
+  placeholders: number
+  approved: boolean
+}
+
+export type ProspectFilters = {
+  stage?: string
+  search_id?: number
+  q?: string
+  only_mobile?: boolean
+  only_with_phone?: boolean
+}
+
+function qs(params: Record<string, unknown>): string {
+  const sp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '' || v === false) continue
+    sp.set(k, String(v))
+  }
+  const s = sp.toString()
+  return s ? `?${s}` : ''
+}
+
+export const prospectApi = {
+  account: () => request<ApifyAccount>('/api/prospect/account'),
+  geocode: (q: string) => request<{ results: GeoResult[] }>(`/api/prospect/geocode?q=${encodeURIComponent(q)}`),
+  searches: () => request<ProspectSearch[]>('/api/prospect/searches'),
+  createSearch: (payload: Record<string, unknown>) =>
+    request<ProspectSearch>('/api/prospect/searches', { method: 'POST', body: JSON.stringify(payload) }),
+  syncSearch: (id: number) =>
+    request<ProspectSearch>(`/api/prospect/searches/${id}/sync`, { method: 'POST' }),
+  abortSearch: (id: number) =>
+    request<ProspectSearch>(`/api/prospect/searches/${id}/abort`, { method: 'POST' }),
+  deleteSearch: (id: number) => request<void>(`/api/prospect/searches/${id}`, { method: 'DELETE' }),
+  prospects: (filters: ProspectFilters = {}) =>
+    request<Prospect[]>(`/api/prospect/prospects${qs(filters as Record<string, unknown>)}`),
+  prospect: (id: number) => request<ProspectDetail>(`/api/prospect/prospects/${id}`),
+  patchProspect: (id: number, patch: Record<string, unknown>) =>
+    request<Prospect>(`/api/prospect/prospects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteProspect: (id: number) => request<void>(`/api/prospect/prospects/${id}`, { method: 'DELETE' }),
+  pipeline: () => request<Pipeline>('/api/prospect/pipeline'),
+  templates: () => request<WaTemplate[]>('/api/prospect/templates'),
+  outreachOne: (id: number, payload: Record<string, unknown>) =>
+    request<Outreach>(`/api/prospect/prospects/${id}/outreach`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  outreachBulk: (payload: Record<string, unknown>) =>
+    request<{ queued: number; skipped: { id: number; name: string; reason: string }[]; cap: number }>(
+      '/api/prospect/outreach/bulk',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  outreachLog: (status?: string) =>
+    request<Outreach[]>(`/api/prospect/outreach${qs({ status })}`),
+  drain: () => request<{ pending: number }>('/api/prospect/outreach/drain', { method: 'POST' }),
+  csvUrl: (filters: ProspectFilters = {}) =>
+    `${BASE}/api/prospect/prospects.csv${qs(filters as Record<string, unknown>)}`,
 }
 
 export const api = {

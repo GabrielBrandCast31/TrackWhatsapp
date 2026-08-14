@@ -21,6 +21,7 @@ SECRET_FIELDS = {
     "google_refresh_token",
     "google_developer_token",
     "webhook_secret",
+    "apify_token",
 }
 
 DEFAULTS: dict = {
@@ -50,6 +51,20 @@ DEFAULTS: dict = {
     "webhook_enabled": False,
     "webhook_url": os.getenv("OUT_WEBHOOK_URL", ""),
     "webhook_secret": os.getenv("OUT_WEBHOOK_SECRET", ""),
+    # --- Prospeccao ativa: varredura no Google Maps via Apify ---
+    "apify_token": os.getenv("APIFY_TOKEN", ""),
+    "apify_actor": os.getenv("APIFY_ACTOR", "compass/crawler-google-places"),
+    "prospect_language": os.getenv("PROSPECT_LANGUAGE", "pt-BR"),
+    "prospect_default_radius_km": float(os.getenv("PROSPECT_DEFAULT_RADIUS_KM", "5")),
+    "prospect_max_per_term": int(os.getenv("PROSPECT_MAX_PER_TERM", "60")),
+    # --- Abordagem ativa no WhatsApp ---
+    # Desligado por padrao: ninguem dispara pra lista fria por acidente.
+    "outreach_enabled": False,
+    "outreach_template_name": os.getenv("OUTREACH_TEMPLATE_NAME", ""),
+    "outreach_template_language": os.getenv("OUTREACH_TEMPLATE_LANGUAGE", "pt_BR"),
+    "outreach_throttle_seconds": int(os.getenv("OUTREACH_THROTTLE_SECONDS", "8")),
+    "outreach_daily_cap": int(os.getenv("OUTREACH_DAILY_CAP", "80")),
+    "outreach_only_mobile": True,
     # --- Comportamento ---
     "default_event_name": "Lead",
     "default_currency": "BRL",
