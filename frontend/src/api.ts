@@ -22,18 +22,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     body = text
   }
   if (!res.ok) {
-    // 404 numa rota da API quase sempre é container servindo código antigo — o
-    // "Not Found" cru não diz isso pra ninguém.
-    if (res.status === 404) {
-      throw new ApiError(
-        `A rota ${path} não existe nesse backend (404). Se você acabou de atualizar o código, ` +
-          'rode `docker compose up --build -d` e recarregue a página com Cmd+Shift+R.',
-      )
-    }
     const detail =
       body && typeof body === 'object' && 'detail' in body
         ? String((body as { detail: unknown }).detail)
         : `HTTP ${res.status}`
+
+    // "Not Found" cru é o 404 do FastAPI para rota inexistente — quase sempre
+    // container servindo código antigo. Um 404 dos nossos handlers vem com texto
+    // próprio ("Prospect nao encontrado") e passa direto.
+    if (res.status === 404 && detail === 'Not Found') {
+      throw new ApiError(
+        `A rota ${path} não existe nesse backend (404). Se você acabou de atualizar o código, ` +
+          'rode `docker compose up --build -d` e recarregue com Cmd+Shift+R.',
+      )
+    }
     throw new ApiError(detail)
   }
   return body as T
