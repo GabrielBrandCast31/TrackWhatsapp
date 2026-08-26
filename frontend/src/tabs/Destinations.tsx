@@ -146,9 +146,11 @@ export default function Destinations({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-4">
-        <p className="text-xs text-ink-500">
-          Destinos ativos são usados quando você dispara sem escolher nada. Na tela de Leads dá pra sobrescrever
-          por disparo.
+        <p className="max-w-3xl text-xs leading-relaxed text-ink-500">
+          Este é o <strong className="text-ink-300">padrão de todas as linhas</strong>: cada número herda o que
+          estiver aqui, e o que ele definir em <strong className="text-ink-300">Números → destinos desta linha</strong>{' '}
+          vale no lugar. Destinos ativos são usados quando você dispara sem escolher nada — na tela de Leads dá
+          pra sobrescrever por disparo.
         </p>
         <Button variant="primary" onClick={save} disabled={busy}>
           {busy ? 'salvando…' : 'Salvar destinos'}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { api, type ConfigResponse } from '../api'
+import { useNumber } from '../numberContext'
 import { Badge, Banner, Button, Card, Copy, Field, Input } from '../ui'
 
 const SECTIONS = [
@@ -133,6 +134,7 @@ function Group({ title, items, onGo }: { title: string; items: Item[]; onGo?: ()
 /* ---------- a aba ---------- */
 
 export default function Manual({ onNavigate }: { onNavigate: (tab: string) => void }) {
+  const { current } = useNumber()
   const [cfg, setCfg] = useState<ConfigResponse | null>(null)
   const [phone, setPhone] = useState('5511999998888')
 
@@ -141,7 +143,12 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
   }, [])
 
   const val = (k: string) => String(cfg?.config[k] ?? '')
-  const has = (k: string) => Boolean(cfg?.config[`${k}__set`]) || val(k).length > 0
+  // um campo conta como preenchido se o global tem OU a linha em uso sobrescreve
+  const has = (k: string) => {
+    const own = current?.overrides ?? {}
+    const ownSet = Boolean(own[`${k}__set`]) || String(own[k] ?? '').length > 0
+    return ownSet || Boolean(cfg?.config[`${k}__set`]) || val(k).length > 0
+  }
 
   const webhookUrl = cfg?.webhook_url ?? ''
   const publicOk = webhookUrl.startsWith('https://')
@@ -150,16 +157,40 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
     'Olá! Vim pelo anúncio. gclid={gclid}',
   )}`
 
+  // as credenciais da Cloud API sao POR LINHA — o checklist olha a linha em uso
   const conexao: Item[] = [
-    { label: 'Access Token', ok: has('wa_access_token'), why: 'Sem ele a plataforma não fala com a Graph API.' },
-    { label: 'Phone Number ID', ok: has('wa_phone_number_id'), why: 'Identifica qual número recebe as mensagens.' },
-    { label: 'WABA ID', ok: has('wa_business_account_id'), why: 'Necessário para assinar os webhooks.' },
-    { label: 'Verify Token', ok: has('wa_verify_token'), why: 'A Meta usa para validar a URL do webhook.' },
+    {
+      label: 'Linha selecionada',
+      ok: Boolean(current),
+      why: current
+        ? `Você está configurando "${current.label}". Troque a linha no topo da tela.`
+        : 'Cadastre um número na aba Números e selecione-o no topo da tela.',
+    },
+    {
+      label: 'Access Token',
+      ok: Boolean(current?.access_token__set),
+      why: 'Sem ele a plataforma não fala com a Graph API por esta linha.',
+    },
+    {
+      label: 'Phone Number ID',
+      ok: Boolean(current?.phone_number_id),
+      why: 'Identifica qual número recebe as mensagens.',
+    },
+    {
+      label: 'WABA ID',
+      ok: Boolean(current?.business_account_id),
+      why: 'Necessário para assinar os webhooks e listar templates desta linha.',
+    },
+    {
+      label: 'Verify Token',
+      ok: Boolean(current?.verify_token),
+      why: 'A Meta usa para validar a URL do webhook desta linha.',
+    },
     {
       label: 'App Secret',
-      ok: has('wa_app_secret'),
+      ok: Boolean(current?.app_secret__set),
       optional: true,
-      why: 'Em branco, qualquer um pode forjar um webhook. Preencha antes de ir a produção.',
+      why: 'Em branco, qualquer um pode forjar um webhook desta linha. Preencha antes de ir a produção.',
     },
     {
       label: 'URL pública HTTPS',
@@ -257,7 +288,11 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
             <p className="text-sm text-ink-500">carregando…</p>
           ) : (
             <div className="space-y-3">
-              <Group title="1. Conexão com o WhatsApp" items={conexao} onGo={() => onNavigate('connection')} />
+              <Group
+                title={`1. Conexão com o WhatsApp${current ? ` · ${current.label}` : ''}`}
+                items={conexao}
+                onGo={() => onNavigate('numbers')}
+              />
               <Group title="2. Meta Conversions API" items={meta} onGo={() => onNavigate('destinations')} />
               <Group title="3. Google Ads (opcional)" items={google} onGo={() => onNavigate('destinations')} />
               <Group title="4. Webhook de saída (opcional)" items={saida} onGo={() => onNavigate('destinations')} />

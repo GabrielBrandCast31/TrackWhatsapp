@@ -1,11 +1,19 @@
-"""Configuracao + status da conexao com o WhatsApp."""
+"""Configuracao GLOBAL + status da conexao com o WhatsApp.
+
+Depois do multi-numero, as credenciais da Cloud API vivem em `wa_numbers` (veja
+`routers/numbers.py`). O que sobra aqui e a config que serve de base pra todas as
+linhas: Apify, prospeccao e os destinos padrao que um numero herda quando nao
+sobrescreve nada. As rotas de conexao continuam existindo e agora aceitam
+`?number_id=` — sem ele, agem sobre o numero padrao.
+"""
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
 from app.services import whatsapp_cloud
@@ -23,10 +31,14 @@ class ConfigPatch(BaseModel):
 @router.get("/config")
 async def get_config(session: AsyncSession = Depends(get_session)):
     cfg = await settings_store.load(session)
+    default = await numbers_service.get_default(session)
     return {
         "config": settings_store.mask(cfg),
+        # URL unica: serve todas as linhas, roteada pelo phone_number_id do payload
         "webhook_url": f"{PUBLIC_BASE_URL.rstrip('/')}/webhook/whatsapp",
         "enabled_destinations": enabled_destinations(cfg),
+        "default_number_id": default.id if default else None,
+        "overridable_fields": list(numbers_service.OVERRIDABLE),
     }
 
 
@@ -40,46 +52,22 @@ async def put_config(patch: ConfigPatch, session: AsyncSession = Depends(get_ses
 
 
 @router.get("/connection/status")
-async def connection_status(session: AsyncSession = Depends(get_session)):
-    """Bate na Graph API pra provar que o token e o numero estao valendo."""
-    cfg = await settings_store.load(session)
-    out: dict = {
-        "configured": bool(cfg.get("wa_access_token") and cfg.get("wa_phone_number_id")),
-        "connected": False,
-        "phone_number": None,
-        "subscribed_apps": [],
-        "errors": [],
-    }
-    if not out["configured"]:
-        out["errors"].append("Preencha o Access Token e o Phone Number ID em Configuracoes.")
-        return out
+async def connection_status(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    """Compatibilidade: status do numero pedido, ou do padrao."""
+    from app.routers.numbers import number_status
 
-    try:
-        info = await whatsapp_cloud.phone_number_info(cfg)
-        out["phone_number"] = info
-        out["connected"] = True
-    except Exception as exc:  # noqa: BLE001
-        out["errors"].append(f"Numero: {exc}")
-
-    if cfg.get("wa_business_account_id"):
-        try:
-            subs = await whatsapp_cloud.subscribed_apps(cfg)
-            out["subscribed_apps"] = subs.get("data", [])
-            if not out["subscribed_apps"]:
-                out["errors"].append(
-                    "Nenhum app assinado nos webhooks do WABA — clique em 'Assinar webhooks'."
-                )
-        except Exception as exc:  # noqa: BLE001
-            out["errors"].append(f"Webhooks: {exc}")
-    else:
-        out["errors"].append("WABA ID nao configurado — nao da pra checar a assinatura do webhook.")
-
-    return out
+    number = await _number_or_400(session, number_id)
+    return await number_status(number.id, session)
 
 
 @router.post("/connection/subscribe")
-async def connection_subscribe(session: AsyncSession = Depends(get_session)):
-    cfg = await settings_store.load(session)
+async def connection_subscribe(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    number = await _number_or_400(session, number_id)
+    cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
     try:
         return await whatsapp_cloud.subscribe_app(cfg)
     except Exception as exc:  # noqa: BLE001
@@ -92,10 +80,22 @@ class SendTest(BaseModel):
 
 
 @router.post("/connection/send-test")
-async def connection_send_test(payload: SendTest, session: AsyncSession = Depends(get_session)):
+async def connection_send_test(
+    payload: SendTest,
+    number_id: int | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+):
     """Manda uma mensagem de verdade — so funciona dentro da janela de 24h."""
-    cfg = await settings_store.load(session)
+    number = await _number_or_400(session, number_id)
+    cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
     try:
         return await whatsapp_cloud.send_text(cfg, payload.to, payload.body)
     except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _number_or_400(session: AsyncSession, number_id: int | None):
+    try:
+        return await numbers_service.require(session, number_id)
+    except numbers_service.NumberError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

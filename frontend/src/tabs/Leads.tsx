@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { useNumber } from '../numberContext'
 import { api, DESTINATION_LABEL, type Contact, type ContactDetail, type Conversion } from '../api'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Toggle, when } from '../ui'
 
@@ -112,6 +113,7 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
 }
 
 export default function Leads({ onChanged }: { onChanged: () => void }) {
+  const { numberId, current, labelOf } = useNumber()
   const [contacts, setContacts] = useState<Contact[]>([])
   const [onlyAttributed, setOnlyAttributed] = useState(false)
   const [selected, setSelected] = useState<ContactDetail | null>(null)
@@ -126,10 +128,10 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
   })
   const [flash, setFlash] = useState<string | null>(null)
 
-  const load = async () => setContacts(await api.contacts(onlyAttributed))
+  const load = async () => setContacts(await api.contacts(onlyAttributed, numberId))
   useEffect(() => {
     void load()
-  }, [onlyAttributed])
+  }, [onlyAttributed, numberId])
 
   const open = async (id: number) => setSelected(await api.contact(id))
 
@@ -137,7 +139,9 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
     <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
       <Card
         title="Leads do WhatsApp"
-        subtitle={`${contacts.length} contato(s). A atribuição chega junto com a primeira mensagem depois do clique.`}
+        subtitle={`${contacts.length} contato(s) em ${
+          current?.label ?? 'todas as linhas'
+        }. A atribuição chega junto com a primeira mensagem depois do clique.`}
         actions={
           <>
             <Button size="sm" onClick={() => setSimOpen(!simOpen)}>
@@ -157,7 +161,8 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
           <div className="mb-4 space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">
             <p className="text-xs leading-relaxed text-ink-500">
               Injeta um payload idêntico ao da Meta, com <code className="font-mono">referral.ctwa_clid</code>.
-              Serve para validar o fluxo inteiro sem precisar de anúncio no ar.
+              Serve para validar o fluxo inteiro sem precisar de anúncio no ar. O lead entra em{' '}
+              <strong className="text-ink-100">{current?.label ?? 'linha padrão'}</strong>.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="wa_id">
@@ -180,7 +185,7 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
               variant="primary"
               size="sm"
               onClick={async () => {
-                await api.simulate(sim)
+                await api.simulate(sim, numberId)
                 setFlash('Lead simulado criado.')
                 setTimeout(() => setFlash(null), 2000)
                 await load()

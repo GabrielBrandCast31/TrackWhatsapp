@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { useNumber } from '../numberContext'
 import { api, DESTINATION_LABEL, type Conversion, type Dispatch } from '../api'
 import { Badge, Button, Card, Empty, Json, when } from '../ui'
 
@@ -33,18 +34,21 @@ function DispatchRow({ d }: { d: Dispatch }) {
 }
 
 export default function Conversions({ onChanged }: { onChanged: () => void }) {
+  const { numberId, current } = useNumber()
   const [rows, setRows] = useState<Conversion[]>([])
   const [busy, setBusy] = useState<number | null>(null)
 
-  const load = async () => setRows(await api.conversions())
+  const load = async () => setRows(await api.conversions(numberId))
   useEffect(() => {
     void load()
-  }, [])
+  }, [numberId])
 
   return (
     <Card
       title="Eventos de conversão enviados"
-      subtitle="Cada disparo guarda o payload que saiu e a resposta de cada destino."
+      subtitle={`${
+        current?.label ?? 'Todas as linhas'
+      } — cada disparo guarda o payload que saiu e a resposta de cada destino.`}
       actions={
         <Button size="sm" onClick={() => void load()}>
           atualizar

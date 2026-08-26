@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { useNumber } from '../numberContext'
 import { api, prospectApi, type ApifyAccount, type GeoResult, type ProspectSearch } from '../api'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Select, Toggle, when } from '../ui'
 
@@ -127,6 +128,7 @@ function ApifyConfig({ onSaved }: { onSaved: () => void }) {
 }
 
 function NewSearch({ onCreated }: { onCreated: () => void }) {
+  const { numberId, current } = useNumber()
   const [address, setAddress] = useState('')
   const [candidates, setCandidates] = useState<GeoResult[]>([])
   const [center, setCenter] = useState<GeoResult | null>(null)
@@ -166,6 +168,7 @@ function NewSearch({ onCreated }: { onCreated: () => void }) {
     setBusy(true)
     try {
       await prospectApi.createSearch({
+        number_id: numberId,
         terms: termList,
         lat: center.lat,
         lng: center.lng,
@@ -189,7 +192,9 @@ function NewSearch({ onCreated }: { onCreated: () => void }) {
   return (
     <Card
       title="Nova varredura"
-      subtitle="Um ponto no mapa, um raio e o que você procura. O resto vira prospect no CRM."
+      subtitle={`Um ponto no mapa, um raio e o que você procura. Os prospects entram em ${
+        current?.label ?? 'a linha padrão'
+      }.`}
     >
       <div className="space-y-4">
         <div>
@@ -336,11 +341,12 @@ function NewSearch({ onCreated }: { onCreated: () => void }) {
 }
 
 export default function Prospecting({ onChanged }: { onChanged: () => void }) {
+  const { numberId, labelOf } = useNumber()
   const [searches, setSearches] = useState<ProspectSearch[]>([])
   const [expanded, setExpanded] = useState<number | null>(null)
 
   const load = async () => {
-    const rows = await prospectApi.searches().catch(() => [])
+    const rows = await prospectApi.searches(numberId).catch(() => [])
     setSearches(rows)
     onChanged()
     return rows
@@ -348,7 +354,7 @@ export default function Prospecting({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [numberId])
 
   // enquanto alguma varredura estiver rodando, o backend sincroniza sozinho a
   // cada listagem — basta a tela reconsultar.
@@ -386,6 +392,7 @@ export default function Prospecting({ onChanged }: { onChanged: () => void }) {
                     <p className="truncate text-sm font-medium text-ink-100">{s.label}</p>
                     <p className="mt-0.5 font-mono text-[11px] text-ink-500">
                       {when(s.created_at)}
+                      {numberId === undefined && ` · ${labelOf(s.wa_number_id)}`}
                       {s.cost_usd != null && ` · US$ ${s.cost_usd.toFixed(4)}`}
                     </p>
                   </div>

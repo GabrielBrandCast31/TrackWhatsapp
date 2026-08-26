@@ -25,6 +25,47 @@ class Setting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class WaNumber(Base):
+    """Um numero de WhatsApp gerido pela plataforma.
+
+    Cada numero e uma linha independente: credenciais proprias da Cloud API e,
+    opcionalmente, destinos de conversao proprios (`overrides`). O que nao for
+    sobrescrito aqui cai na configuracao global de `settings`.
+
+    Todo lead, prospect e abordagem carrega o numero de onde veio — e assim que
+    a plataforma atende varios clientes sem misturar base.
+    """
+
+    __tablename__ = "wa_numbers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String(120))                      # "Clinica X", "Loja Centro"
+    phone_number_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    business_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    app_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verify_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    graph_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # cache do ultimo /status — evita bater na Graph API so pra desenhar a lista
+    display_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    verified_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    quality_rating: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # subconjunto das chaves de settings_store.DEFAULTS. Chave ausente = herda o global.
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Contact(Base):
     """Uma pessoa que iniciou conversa no WhatsApp, com o rastreio de origem."""
 
@@ -51,6 +92,11 @@ class Contact(Base):
     utm: Mapped[dict] = mapped_column(JSON, default=dict)
     first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone_number_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # por qual linha esse lead entrou. O mesmo wa_id falando com dois numeros
+    # gera dois contatos — cada um com a atribuicao da sua campanha.
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -125,6 +171,10 @@ class WebhookLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone_number_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -144,6 +194,9 @@ class ProspectSearch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     label: Mapped[str] = mapped_column(String(240))
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     terms: Mapped[list] = mapped_column(JSON, default=list)          # ["clinica odontologica"]
     center_lat: Mapped[float] = mapped_column(Float)
     center_lng: Mapped[float] = mapped_column(Float)
@@ -183,7 +236,12 @@ class Prospect(Base):
     search_id: Mapped[int | None] = mapped_column(
         ForeignKey("prospect_searches.id", ondelete="SET NULL"), index=True, nullable=True
     )
-    place_id: Mapped[str | None] = mapped_column(String(120), unique=True, index=True, nullable=True)
+    place_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    # de quem e esse lead. O dedupe por place_id/telefone acontece DENTRO do numero:
+    # dois clientes podem prospectar a mesma empresa sem se atrapalhar.
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
 
     name: Mapped[str] = mapped_column(String(240))
     category: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -230,6 +288,9 @@ class Outreach(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     prospect_id: Mapped[int] = mapped_column(ForeignKey("prospects.id", ondelete="CASCADE"), index=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
 
     kind: Mapped[str] = mapped_column(String(16), default="template")  # template | text
     template_name: Mapped[str | None] = mapped_column(String(120), nullable=True)

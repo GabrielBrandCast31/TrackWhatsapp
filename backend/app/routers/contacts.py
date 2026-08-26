@@ -6,7 +6,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app import settings_store
+from app import numbers as numbers_service
 from app.db import get_session
 from app.ingest import build_simulated_payload, ingest_payload
 from app.models import Contact, Conversion, Message, WebhookLog
@@ -18,6 +18,7 @@ def serialize_contact(c: Contact, conversions: int = 0) -> dict:
     return {
         "id": c.id,
         "wa_id": c.wa_id,
+        "wa_number_id": c.wa_number_id,
         "phone_e164": c.phone_e164,
         "name": c.name,
         "first_message": c.first_message,
@@ -44,6 +45,7 @@ def serialize_contact(c: Contact, conversions: int = 0) -> dict:
 @router.get("/contacts")
 async def list_contacts(
     only_attributed: bool = Query(default=False),
+    number_id: int | None = Query(default=None, description="filtra pela linha de WhatsApp"),
     limit: int = Query(default=100, le=500),
     session: AsyncSession = Depends(get_session),
 ):
@@ -51,6 +53,8 @@ async def list_contacts(
         (await session.execute(select(Conversion.contact_id, func.count()).group_by(Conversion.contact_id))).all()
     )
     stmt = select(Contact).order_by(desc(Contact.last_seen_at)).limit(limit)
+    if number_id is not None:
+        stmt = stmt.where(Contact.wa_number_id == number_id)
     if only_attributed:
         stmt = stmt.where(
             (Contact.ctwa_clid.is_not(None))
@@ -115,12 +119,21 @@ class SimulateIn(BaseModel):
     ctwa_clid: str | None = "ARAySIMULADOclid1234567890"
     ad_id: str | None = "120210000000000000"
     source_url: str | None = "https://fb.me/simulado?utm_source=meta&utm_campaign=teste"
+    number_id: int | None = None
 
 
 @router.post("/contacts/simulate")
-async def simulate_inbound(payload: SimulateIn, session: AsyncSession = Depends(get_session)):
+async def simulate_inbound(
+    payload: SimulateIn,
+    number_id: int | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+):
     """Injeta um payload identico ao da Meta — testa o fluxo inteiro sem anuncio no ar."""
-    cfg = await settings_store.load(session)
+    try:
+        number = await numbers_service.require(session, number_id or payload.number_id)
+    except numbers_service.NumberError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     fake = build_simulated_payload(
         wa_id=payload.wa_id,
         name=payload.name,
@@ -128,15 +141,30 @@ async def simulate_inbound(payload: SimulateIn, session: AsyncSession = Depends(
         ctwa_clid=payload.ctwa_clid,
         ad_id=payload.ad_id,
         source_url=payload.source_url,
-        phone_number_id=cfg.get("wa_phone_number_id") or "SIMULATED",
+        phone_number_id=number.phone_number_id or "SIMULATED",
     )
-    result = await ingest_payload(session, fake)
-    return {"simulated": True, **result}
+    result = await ingest_payload(session, fake, fallback_number=number)
+    return {"simulated": True, "wa_number_id": number.id, **result}
 
 
 @router.get("/webhook-logs")
-async def webhook_logs(limit: int = Query(default=25, le=100), session: AsyncSession = Depends(get_session)):
-    rows = (
-        (await session.execute(select(WebhookLog).order_by(desc(WebhookLog.id)).limit(limit))).scalars().all()
-    )
-    return [{"id": r.id, "summary": r.summary, "created_at": r.created_at, "payload": r.payload} for r in rows]
+async def webhook_logs(
+    number_id: int | None = Query(default=None),
+    limit: int = Query(default=25, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    stmt = select(WebhookLog).order_by(desc(WebhookLog.id)).limit(limit)
+    if number_id is not None:
+        stmt = stmt.where(WebhookLog.wa_number_id == number_id)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "summary": r.summary,
+            "created_at": r.created_at,
+            "wa_number_id": r.wa_number_id,
+            "phone_number_id": r.phone_number_id,
+            "payload": r.payload,
+        }
+        for r in rows
+    ]

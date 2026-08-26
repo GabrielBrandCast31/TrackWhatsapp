@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import {
   api,
+  numbersApi,
   prospectApi,
   STAGES,
   STAGE_LABEL,
@@ -13,6 +14,7 @@ import {
   type Stage,
   type WaTemplate,
 } from '../api'
+import { useNumber } from '../numberContext'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Select, Textarea, Toggle, when } from '../ui'
 
 const STAGE_TONE: Record<Stage, 'neutral' | 'good' | 'bad' | 'warn' | 'info'> = {
@@ -31,7 +33,13 @@ function PhoneBadge({ p }: { p: Prospect }) {
   return <Badge>telefone</Badge>
 }
 
+/** Config da abordagem.
+ *
+ * Com uma linha selecionada, o que voce mexe aqui vale SO PRA ELA (vira override
+ * do numero). Em "Todas as linhas", mexe no padrao global que as linhas herdam.
+ */
 function OutreachConfig({ onSaved }: { onSaved: () => void }) {
+  const { numberId, current, reload } = useNumber()
   const [open, setOpen] = useState(false)
   const [enabled, setEnabled] = useState(false)
   const [onlyMobile, setOnlyMobile] = useState(true)
@@ -41,27 +49,32 @@ function OutreachConfig({ onSaved }: { onSaved: () => void }) {
 
   const load = async () => {
     const { config } = await api.getConfig()
-    setEnabled(Boolean(config.outreach_enabled))
-    setOnlyMobile(Boolean(config.outreach_only_mobile))
-    setThrottle(Number(config.outreach_throttle_seconds ?? 8))
-    setCap(Number(config.outreach_daily_cap ?? 80))
+    // efetivo = override da linha, com o global por baixo
+    const own = numberId !== undefined ? (await numbersApi.get(numberId)).overrides : {}
+    const pick = (key: string) => (own[key] !== undefined && own[key] !== '' ? own[key] : config[key])
+    setEnabled(Boolean(pick('outreach_enabled')))
+    setOnlyMobile(Boolean(pick('outreach_only_mobile')))
+    setThrottle(Number(pick('outreach_throttle_seconds') ?? 8))
+    setCap(Number(pick('outreach_daily_cap') ?? 80))
   }
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [numberId])
 
   const save = async (patch: Record<string, unknown>) => {
-    await api.putConfig(patch)
+    if (numberId !== undefined) await numbersApi.patch(numberId, { overrides: patch })
+    else await api.putConfig(patch)
     await load()
+    await reload()
     onSaved()
-    setMsg('Salvo.')
-    setTimeout(() => setMsg(null), 2000)
+    setMsg(numberId !== undefined ? `Salvo para ${current?.label ?? 'esta linha'}.` : 'Salvo (global).')
+    setTimeout(() => setMsg(null), 2500)
   }
 
   return (
     <Card
-      title="Abordagem ativa"
+      title={numberId !== undefined ? `Abordagem ativa · ${current?.label ?? ''}` : 'Abordagem ativa (padrão global)'}
       subtitle={enabled ? 'Ligada — os disparos saem de verdade.' : 'Desligada — nada é enviado.'}
       actions={
         <>
@@ -114,9 +127,10 @@ function OutreachConfig({ onSaved }: { onSaved: () => void }) {
         </div>
       ) : (
         <p className="text-xs leading-relaxed text-ink-500">
-          O disparo usa o mesmo número da Cloud API que já está conectado na aba Conexão. Quem responder cai
-          automaticamente na aba Leads como contato, e o prospect vira{' '}
-          <span className="text-ink-300">Respondeu</span> aqui.
+          O disparo sai pela linha{' '}
+          <span className="text-ink-300">{current?.label ?? 'padrão'}</span> e o limite diário conta
+          separado por número. Quem responder cai na aba Leads como contato dessa mesma linha, e o
+          prospect vira <span className="text-ink-300">Respondeu</span> aqui.
         </p>
       )}
     </Card>
@@ -132,6 +146,7 @@ function SendPanel({
   onSent: (info: string) => void
   onClear: () => void
 }) {
+  const { numberId, current } = useNumber()
   const [kind, setKind] = useState<'template' | 'text'>('template')
   const [templates, setTemplates] = useState<WaTemplate[] | null>(null)
   const [templateErr, setTemplateErr] = useState<string | null>(null)
@@ -147,7 +162,7 @@ function SendPanel({
   const loadTemplates = async () => {
     setTemplateErr(null)
     try {
-      const rows = await prospectApi.templates()
+      const rows = await prospectApi.templates(numberId)
       setTemplates(rows)
       const first = rows.find((t) => t.approved)
       if (first) {
@@ -162,7 +177,7 @@ function SendPanel({
 
   useEffect(() => {
     void loadTemplates()
-  }, [])
+  }, [numberId])
 
   const active = templates?.find((t) => `${t.name}|${t.language}` === chosen)
 
@@ -179,8 +194,9 @@ function SendPanel({
               template_language: active?.language,
               template_params: params,
               prospect_ids: selected,
+              number_id: numberId,
             }
-          : { kind, text, prospect_ids: selected }
+          : { kind, text, prospect_ids: selected, number_id: numberId }
       const res = await prospectApi.outreachBulk(payload)
       setResult(res)
       onSent(`${res.queued} abordagem(ns) na fila.`)
@@ -194,7 +210,9 @@ function SendPanel({
   return (
     <Card
       title={`Disparar para ${selected.length} selecionado(s)`}
-      subtitle="Vai para uma fila com intervalo entre envios — o resultado aparece no log abaixo."
+      subtitle={`Sai por ${
+        current?.label ?? 'a linha de cada prospect'
+      } — vai para uma fila com intervalo entre envios; o resultado aparece no log abaixo.`}
       actions={
         <Button size="sm" onClick={onClear}>
           limpar seleção
@@ -474,6 +492,7 @@ function ProspectDetailCard({
 }
 
 export default function Crm({ onChanged }: { onChanged: () => void }) {
+  const { numberId, current, labelOf } = useNumber()
   const [pipe, setPipe] = useState<Pipeline | null>(null)
   const [rows, setRows] = useState<Prospect[]>([])
   const [searches, setSearches] = useState<ProspectSearch[]>([])
@@ -489,16 +508,17 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
   const filters = {
     stage: stage || undefined,
     search_id: searchId ? Number(searchId) : undefined,
+    number_id: numberId,
     q: q || undefined,
     only_mobile: onlyMobile,
   }
 
   const load = async () => {
     const [pl, list, srch, lg] = await Promise.all([
-      prospectApi.pipeline().catch(() => null),
+      prospectApi.pipeline(numberId).catch(() => null),
       prospectApi.prospects(filters).catch(() => []),
-      prospectApi.searches().catch(() => []),
-      prospectApi.outreachLog().catch(() => []),
+      prospectApi.searches(numberId).catch(() => []),
+      prospectApi.outreachLog(undefined, numberId).catch(() => []),
     ])
     setPipe(pl)
     setRows(list)
@@ -508,8 +528,9 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
   }
 
   useEffect(() => {
+    setSelected([])  // selecao de outra linha nao pode sobreviver a troca de escopo
     void load()
-  }, [stage, searchId, onlyMobile])
+  }, [stage, searchId, onlyMobile, numberId])
 
   // fila andando -> a tela reconsulta pra mostrar os envios saindo
   const queued = pipe?.outreach.queued ?? 0
@@ -525,7 +546,16 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="space-y-5">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <Card title="Pipeline" subtitle={pipe ? `${pipe.total} prospects · ${pipe.with_mobile} com celular` : ''}>
+        <Card
+          title="Pipeline"
+          subtitle={
+            pipe
+              ? `${current?.label ?? 'Todas as linhas'} · ${pipe.total} prospects · ${
+                  pipe.with_mobile
+                } com celular`
+              : ''
+          }
+        >
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setStage('')}
@@ -659,6 +689,7 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
                         )}
                         {!p.website && <Badge tone="info">sem site</Badge>}
                         {p.contact_id && <Badge tone="good">respondeu</Badge>}
+                        {numberId === undefined && <Badge>{labelOf(p.wa_number_id)}</Badge>}
                       </div>
                     </button>
                   </li>
@@ -693,7 +724,7 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
               <Button
                 size="sm"
                 onClick={async () => {
-                  await prospectApi.drain()
+                  await prospectApi.drain(numberId)
                   await load()
                 }}
               >

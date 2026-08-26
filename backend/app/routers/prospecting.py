@@ -4,6 +4,10 @@ Fluxo: escolhe um ponto e um raio -> o Apify varre o Google Maps -> os lugares
 entram como prospects com telefone normalizado -> voce dispara a abordagem no
 WhatsApp -> quem responde vira Contact e cai no fluxo de conversao que ja existia.
 
+Multi-numero: cada varredura, prospect e abordagem pertence a uma linha de
+WhatsApp. O dedupe do import, o cap diario e o throttle sao TODOS por linha —
+duas contas prospectando em paralelo nao roubam cota uma da outra.
+
 A sincronizacao do run do Apify e preguicosa: as rotas de listagem e de detalhe
 conferem no Apify qualquer busca que ainda esteja rodando e importam sozinhas
 quando termina. Sem worker separado, sem estado orfao se o processo reiniciar.
@@ -22,9 +26,10 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import numbers as numbers_service
 from app import phones, settings_store
 from app.db import SessionLocal, get_session
-from app.models import STAGES, Outreach, Prospect, ProspectSearch
+from app.models import STAGES, Outreach, Prospect, ProspectSearch, WaNumber
 from app.services import apify, geo, whatsapp_cloud
 
 log = logging.getLogger(__name__)
@@ -45,6 +50,7 @@ def serialize_search(s: ProspectSearch) -> dict:
     return {
         "id": s.id,
         "label": s.label,
+        "wa_number_id": s.wa_number_id,
         "terms": s.terms or [],
         "center": {"lat": s.center_lat, "lng": s.center_lng},
         "radius_km": s.radius_km,
@@ -74,6 +80,7 @@ def serialize_outreach(o: Outreach) -> dict:
     return {
         "id": o.id,
         "prospect_id": o.prospect_id,
+        "wa_number_id": o.wa_number_id,
         "kind": o.kind,
         "template_name": o.template_name,
         "template_language": o.template_language,
@@ -94,6 +101,7 @@ def serialize_prospect(p: Prospect, outreaches: bool = False) -> dict:
     out = {
         "id": p.id,
         "search_id": p.search_id,
+        "wa_number_id": p.wa_number_id,
         "place_id": p.place_id,
         "name": p.name,
         "category": p.category,
@@ -122,6 +130,19 @@ def serialize_prospect(p: Prospect, outreaches: bool = False) -> dict:
         out["outreaches"] = [serialize_outreach(o) for o in (p.outreaches or [])]
         out["raw"] = p.raw
     return out
+
+
+async def _resolve(session: AsyncSession, number_id: int | None) -> tuple[WaNumber, dict]:
+    """(linha, config efetiva). Sem number_id, usa a linha padrao."""
+    try:
+        return await numbers_service.resolve_cfg(session, number_id)
+    except numbers_service.NumberError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _scoped(stmt, model, number_id: int | None):
+    """Filtra por linha. `number_id=None` = sem filtro (visao de todas as linhas)."""
+    return stmt if number_id is None else stmt.where(model.wa_number_id == number_id)
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +184,7 @@ class SearchIn(BaseModel):
     location_label: str | None = None
     max_per_term: int = Field(default=60, ge=1, le=500)
     label: str | None = None
+    number_id: int | None = None
     skip_closed: bool = True
     min_stars: str = ""
     website: str = "allPlaces"
@@ -172,7 +194,7 @@ class SearchIn(BaseModel):
 @router.post("/searches", status_code=201)
 async def create_search(payload: SearchIn, session: AsyncSession = Depends(get_session)):
     """Cria a varredura e dispara o actor. Volta na hora, com status `running`."""
-    cfg = await settings_store.load(session)
+    number, cfg = await _resolve(session, payload.number_id)
     terms = [t.strip() for t in payload.terms if t and t.strip()]
     if not terms:
         raise HTTPException(status_code=400, detail="Informe pelo menos um termo de busca.")
@@ -197,6 +219,7 @@ async def create_search(payload: SearchIn, session: AsyncSession = Depends(get_s
 
     search = ProspectSearch(
         label=label[:240],
+        wa_number_id=number.id,
         terms=terms,
         center_lat=payload.lat,
         center_lng=payload.lng,
@@ -274,22 +297,20 @@ async def _import_results(session: AsyncSession, cfg: dict, search: ProspectSear
     center = (search.center_lat, search.center_lng)
     limit_km = search.radius_km * RADIUS_SLACK
 
-    # o que ja existe no CRM — o dedupe atravessa varreduras diferentes
-    existing_places = set(
-        (await session.execute(select(Prospect.place_id).where(Prospect.place_id.is_not(None))))
-        .scalars()
-        .all()
+    # o que ja existe no CRM DESTA linha — o dedupe atravessa varreduras diferentes,
+    # mas nao atravessa clientes: a mesma empresa pode ser lead de dois numeros.
+    owner = search.wa_number_id
+    places_stmt = _scoped(
+        select(Prospect.place_id).where(Prospect.place_id.is_not(None)), Prospect, owner
+    )
+    existing_places = set((await session.execute(places_stmt)).scalars().all())
+
+    phones_stmt = _scoped(
+        select(Prospect.phone_e164).where(Prospect.phone_e164.is_not(None)), Prospect, owner
     )
     existing_keys = {
         key
-        for key in (
-            phones.match_key(p)
-            for p in (
-                await session.execute(select(Prospect.phone_e164).where(Prospect.phone_e164.is_not(None)))
-            )
-            .scalars()
-            .all()
-        )
+        for key in (phones.match_key(p) for p in (await session.execute(phones_stmt)).scalars().all())
         if key
     }
 
@@ -316,7 +337,7 @@ async def _import_results(session: AsyncSession, cfg: dict, search: ProspectSear
             dupe += 1
             continue
 
-        session.add(Prospect(search_id=search.id, raw=item, **fields))
+        session.add(Prospect(search_id=search.id, wa_number_id=owner, raw=item, **fields))
         if place_id:
             existing_places.add(place_id)
         if key:
@@ -335,13 +356,14 @@ async def _import_results(session: AsyncSession, cfg: dict, search: ProspectSear
 
 @router.get("/searches")
 async def list_searches(
-    limit: int = Query(default=50, le=200), session: AsyncSession = Depends(get_session)
+    number_id: int | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    session: AsyncSession = Depends(get_session),
 ):
     cfg = await settings_store.load(session)
+    stmt = _scoped(select(ProspectSearch), ProspectSearch, number_id)
     rows = (
-        (await session.execute(select(ProspectSearch).order_by(desc(ProspectSearch.id)).limit(limit)))
-        .scalars()
-        .all()
+        (await session.execute(stmt.order_by(desc(ProspectSearch.id)).limit(limit))).scalars().all()
     )
     for row in rows:
         if row.status in ("queued", "running"):
@@ -410,13 +432,14 @@ async def delete_search(search_id: int, session: AsyncSession = Depends(get_sess
 async def list_prospects(
     stage: str | None = Query(default=None),
     search_id: int | None = Query(default=None),
+    number_id: int | None = Query(default=None),
     q: str | None = Query(default=None),
     only_mobile: bool = Query(default=False),
     only_with_phone: bool = Query(default=False),
     limit: int = Query(default=200, le=1000),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(Prospect)
+    stmt = _scoped(select(Prospect), Prospect, number_id)
     if stage:
         stmt = stmt.where(Prospect.stage == stage)
     if search_id:
@@ -436,30 +459,47 @@ async def list_prospects(
 
 
 @router.get("/pipeline")
-async def pipeline(session: AsyncSession = Depends(get_session)):
-    """Contagem por etapa + numeros que a UI mostra no topo."""
+async def pipeline(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    """Contagem por etapa + numeros que a UI mostra no topo, da linha escolhida."""
     by_stage = dict(
-        (await session.execute(select(Prospect.stage, func.count()).group_by(Prospect.stage))).all()
+        (
+            await session.execute(
+                _scoped(select(Prospect.stage, func.count()), Prospect, number_id).group_by(Prospect.stage)
+            )
+        ).all()
     )
-    total = (await session.execute(select(func.count(Prospect.id)))).scalar_one()
+    total = (
+        await session.execute(_scoped(select(func.count(Prospect.id)), Prospect, number_id))
+    ).scalar_one()
     with_mobile = (
-        await session.execute(select(func.count(Prospect.id)).where(Prospect.phone_kind == "mobile"))
+        await session.execute(
+            _scoped(
+                select(func.count(Prospect.id)).where(Prospect.phone_kind == "mobile"), Prospect, number_id
+            )
+        )
     ).scalar_one()
-    sent = (
-        await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "sent"))
-    ).scalar_one()
-    queued = (
-        await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "queued"))
-    ).scalar_one()
-    failed = (
-        await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "failed"))
-    ).scalar_one()
+
+    async def _outreach(status: str) -> int:
+        return (
+            await session.execute(
+                _scoped(
+                    select(func.count(Outreach.id)).where(Outreach.status == status), Outreach, number_id
+                )
+            )
+        ).scalar_one()
+
     return {
         "stages": {s: by_stage.get(s, 0) for s in STAGES},
         "total": total,
         "with_mobile": with_mobile,
-        "outreach": {"sent": sent, "queued": queued, "failed": failed},
-        "sent_today": await _sent_today(session),
+        "outreach": {
+            "sent": await _outreach("sent"),
+            "queued": await _outreach("queued"),
+            "failed": await _outreach("failed"),
+        },
+        "sent_today": await _sent_today(session, number_id),
     }
 
 
@@ -522,9 +562,10 @@ async def delete_prospect(prospect_id: int, session: AsyncSession = Depends(get_
 async def export_csv(
     stage: str | None = Query(default=None),
     search_id: int | None = Query(default=None),
+    number_id: int | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(Prospect).order_by(Prospect.id)
+    stmt = _scoped(select(Prospect), Prospect, number_id).order_by(Prospect.id)
     if stage:
         stmt = stmt.where(Prospect.stage == stage)
     if search_id:
@@ -555,9 +596,11 @@ async def export_csv(
 
 
 @router.get("/templates")
-async def list_templates(session: AsyncSession = Depends(get_session)):
-    """Templates do WABA — a lista de onde a abordagem fria pode sair."""
-    cfg = await settings_store.load(session)
+async def list_templates(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    """Templates do WABA da linha — cada numero tem os seus templates aprovados."""
+    _, cfg = await _resolve(session, number_id)
     try:
         raw = await whatsapp_cloud.message_templates(cfg)
     except Exception as exc:  # noqa: BLE001 — a UI mostra o motivo cru
@@ -577,13 +620,12 @@ async def list_templates(session: AsyncSession = Depends(get_session)):
     ]
 
 
-async def _sent_today(session: AsyncSession) -> int:
+async def _sent_today(session: AsyncSession, number_id: int | None = None) -> int:
+    """Abordagens enviadas nas ultimas 24h. O cap e POR LINHA: cada numero tem a
+    sua reputacao na Meta, entao somar tudo penalizaria quem nao disparou."""
     since = datetime.now(timezone.utc) - timedelta(days=1)
-    return (
-        await session.execute(
-            select(func.count(Outreach.id)).where(Outreach.status == "sent", Outreach.sent_at >= since)
-        )
-    ).scalar_one()
+    stmt = select(func.count(Outreach.id)).where(Outreach.status == "sent", Outreach.sent_at >= since)
+    return (await session.execute(_scoped(stmt, Outreach, number_id))).scalar_one()
 
 
 def _fill_params(template_params: list[str], prospect: Prospect) -> list[str]:
@@ -604,6 +646,7 @@ def _fill_params(template_params: list[str], prospect: Prospect) -> list[str]:
 
 
 class OutreachIn(BaseModel):
+    number_id: int | None = None  # de qual linha sai o disparo; None = a do prospect
     kind: str = "template"  # template | text
     template_name: str | None = None
     template_language: str | None = None
@@ -615,7 +658,9 @@ class BulkOutreachIn(OutreachIn):
     prospect_ids: list[int] = Field(min_length=1)
 
 
-def _build_outreach(cfg: dict, payload: OutreachIn, prospect: Prospect) -> tuple[dict, Outreach]:
+def _build_outreach(
+    cfg: dict, payload: OutreachIn, prospect: Prospect, wa_number_id: int | None
+) -> tuple[dict, Outreach]:
     """Monta o payload da Graph API e o registro de abordagem (ainda `queued`)."""
     to = phones.to_wa_id(prospect.phone_e164)
     if not to:
@@ -628,7 +673,11 @@ def _build_outreach(cfg: dict, payload: OutreachIn, prospect: Prospect) -> tuple
         body = _fill_params([body], prospect)[0]
         request = whatsapp_cloud.build_text_payload(to, body)
         record = Outreach(
-            prospect_id=prospect.id, kind="text", body_preview=body, to_phone=prospect.phone_e164
+            prospect_id=prospect.id,
+            wa_number_id=wa_number_id,
+            kind="text",
+            body_preview=body,
+            to_phone=prospect.phone_e164,
         )
         return request, record
 
@@ -643,6 +692,7 @@ def _build_outreach(cfg: dict, payload: OutreachIn, prospect: Prospect) -> tuple
     request = whatsapp_cloud.build_template_payload(to, name, language, params)
     record = Outreach(
         prospect_id=prospect.id,
+        wa_number_id=wa_number_id,
         kind="template",
         template_name=name,
         template_language=language,
@@ -681,17 +731,19 @@ async def _send_one(session: AsyncSession, cfg: dict, record: Outreach, request:
 async def outreach_one(
     prospect_id: int, payload: OutreachIn, session: AsyncSession = Depends(get_session)
 ):
-    """Dispara uma abordagem agora e devolve a resposta crua da Meta."""
-    cfg = await settings_store.load(session)
-    if not cfg.get("outreach_enabled"):
-        raise HTTPException(
-            status_code=400,
-            detail="Abordagem ativa esta desligada. Ligue em Prospecção → Configuração antes de disparar.",
-        )
-
+    """Dispara uma abordagem agora, pela linha do prospect, e devolve a resposta crua da Meta."""
     prospect = await session.get(Prospect, prospect_id)
     if prospect is None:
         raise HTTPException(status_code=404, detail="Prospect nao encontrado.")
+
+    number, cfg = await _resolve(session, payload.number_id or prospect.wa_number_id)
+    if not cfg.get("outreach_enabled"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Abordagem ativa está desligada para '{number.label}'. "
+            "Ligue em Prospecção → Configuração antes de disparar.",
+        )
+
     if cfg.get("outreach_only_mobile") and prospect.phone_kind != "mobile" and payload.kind == "template":
         raise HTTPException(
             status_code=400,
@@ -700,11 +752,13 @@ async def outreach_one(
         )
 
     cap = int(cfg.get("outreach_daily_cap") or 0)
-    if cap and await _sent_today(session) >= cap:
-        raise HTTPException(status_code=429, detail=f"Limite diario de {cap} abordagens atingido.")
+    if cap and await _sent_today(session, number.id) >= cap:
+        raise HTTPException(
+            status_code=429, detail=f"Limite diario de {cap} abordagens atingido em '{number.label}'."
+        )
 
     try:
-        request, record = _build_outreach(cfg, payload, prospect)
+        request, record = _build_outreach(cfg, payload, prospect, number.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -721,13 +775,6 @@ async def outreach_bulk(payload: BulkOutreachIn, session: AsyncSession = Depends
     Enfileirar em vez de enviar na hora e proposital: com throttle de alguns segundos
     por numero, 50 disparos levariam minutos e a requisicao estouraria.
     """
-    cfg = await settings_store.load(session)
-    if not cfg.get("outreach_enabled"):
-        raise HTTPException(
-            status_code=400,
-            detail="Abordagem ativa esta desligada. Ligue em Prospecção → Configuração antes de disparar.",
-        )
-
     rows = (
         (await session.execute(select(Prospect).where(Prospect.id.in_(payload.prospect_ids))))
         .scalars()
@@ -736,21 +783,43 @@ async def outreach_bulk(payload: BulkOutreachIn, session: AsyncSession = Depends
     if not rows:
         raise HTTPException(status_code=404, detail="Nenhum prospect encontrado para esses ids.")
 
-    only_mobile = bool(cfg.get("outreach_only_mobile"))
+    # a config vale por linha, entao resolvemos uma vez por linha envolvida no lote
+    forced = payload.number_id
+    cache: dict[int, tuple[WaNumber, dict]] = {}
+
+    async def _cfg_for(prospect: Prospect) -> tuple[WaNumber, dict]:
+        key = forced or prospect.wa_number_id or 0
+        if key not in cache:
+            cache[key] = await _resolve(session, forced or prospect.wa_number_id)
+        return cache[key]
+
     queued = 0
     skipped: list[dict] = []
+    caps: dict[str, int | None] = {}
 
     for prospect in rows:
+        number, cfg = await _cfg_for(prospect)
+        caps[number.label] = cfg.get("outreach_daily_cap")
+
+        if not cfg.get("outreach_enabled"):
+            skipped.append(
+                {
+                    "id": prospect.id,
+                    "name": prospect.name,
+                    "reason": f"abordagem desligada em '{number.label}'",
+                }
+            )
+            continue
         if not prospect.phone_e164:
             skipped.append({"id": prospect.id, "name": prospect.name, "reason": "sem telefone"})
             continue
-        if only_mobile and prospect.phone_kind != "mobile":
+        if cfg.get("outreach_only_mobile") and prospect.phone_kind != "mobile":
             skipped.append(
                 {"id": prospect.id, "name": prospect.name, "reason": f"telefone {prospect.phone_kind}"}
             )
             continue
         try:
-            request, record = _build_outreach(cfg, payload, prospect)
+            request, record = _build_outreach(cfg, payload, prospect, number.id)
         except ValueError as exc:
             skipped.append({"id": prospect.id, "name": prospect.name, "reason": str(exc)})
             continue
@@ -763,16 +832,17 @@ async def outreach_bulk(payload: BulkOutreachIn, session: AsyncSession = Depends
     if queued:
         start_queue_worker()
 
-    return {"queued": queued, "skipped": skipped, "cap": cfg.get("outreach_daily_cap")}
+    return {"queued": queued, "skipped": skipped, "cap": caps}
 
 
 @router.get("/outreach")
 async def list_outreach(
     status: str | None = Query(default=None),
+    number_id: int | None = Query(default=None),
     limit: int = Query(default=100, le=500),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(Outreach).order_by(desc(Outreach.id)).limit(limit)
+    stmt = _scoped(select(Outreach), Outreach, number_id).order_by(desc(Outreach.id)).limit(limit)
     if status:
         stmt = stmt.where(Outreach.status == status)
     rows = (await session.execute(stmt)).scalars().all()
@@ -799,27 +869,45 @@ def start_queue_worker() -> None:
 
 
 async def _drain_queue() -> None:
-    """Envia as abordagens `queued`, uma a uma, respeitando throttle e cap diario.
+    """Envia as abordagens `queued`, uma a uma, respeitando throttle e cap de CADA linha.
 
     Sessao propria: o worker vive fora do ciclo de vida da requisicao.
+
+    Multi-numero: uma linha com a abordagem desligada nao trava a fila das outras —
+    seus registros ficam de lado (continuam `queued`) e a fila segue com o resto.
     """
+    paused: set[int] = set()  # linhas desligadas nesta passada
+
     while True:
         async with SessionLocal() as session:
-            cfg = await settings_store.load(session)
-            if not cfg.get("outreach_enabled"):
-                log.info("fila de abordagem parada: outreach_enabled esta desligado")
+            global_cfg = await settings_store.load(session)
+
+            stmt = select(Outreach).where(Outreach.status == "queued")
+            if paused:
+                stmt = stmt.where(
+                    Outreach.wa_number_id.is_(None) | Outreach.wa_number_id.not_in(paused)
+                )
+            record = (await session.execute(stmt.order_by(Outreach.id).limit(1))).scalar_one_or_none()
+            if record is None:
+                if paused:
+                    log.info("fila parada: %s linha(s) com abordagem desligada", len(paused))
                 return
 
-            record = (
-                await session.execute(
-                    select(Outreach).where(Outreach.status == "queued").order_by(Outreach.id).limit(1)
-                )
-            ).scalar_one_or_none()
-            if record is None:
-                return
+            number = (
+                await session.get(WaNumber, record.wa_number_id)
+                if record.wa_number_id is not None
+                else await numbers_service.get_default(session)
+            )
+            cfg = numbers_service.effective_cfg(global_cfg, number)
+
+            if not cfg.get("outreach_enabled"):
+                label = number.label if number else "linha padrão"
+                log.info("abordagem desligada em %s: registros dessa linha ficam na fila", label)
+                paused.add(record.wa_number_id or -1)
+                continue
 
             cap = int(cfg.get("outreach_daily_cap") or 0)
-            if cap and await _sent_today(session) >= cap:
+            if cap and await _sent_today(session, record.wa_number_id) >= cap:
                 record.status = "skipped"
                 record.error = f"Limite diario de {cap} abordagens atingido."
                 await session.commit()
@@ -833,11 +921,20 @@ async def _drain_queue() -> None:
 
 
 @router.post("/outreach/drain")
-async def drain_now(session: AsyncSession = Depends(get_session)):
+async def drain_now(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
     """Reacende o worker — util depois de reiniciar o backend com fila pendente."""
     pending = (
+        await session.execute(
+            _scoped(
+                select(func.count(Outreach.id)).where(Outreach.status == "queued"), Outreach, number_id
+            )
+        )
+    ).scalar_one()
+    total = (
         await session.execute(select(func.count(Outreach.id)).where(Outreach.status == "queued"))
     ).scalar_one()
-    if pending:
+    if total:
         start_queue_worker()
     return {"pending": pending}

@@ -1,4 +1,9 @@
-"""Disparo e historico dos eventos de conversao."""
+"""Disparo e historico dos eventos de conversao.
+
+Multi-numero: o destino de uma conversao sai da linha do contato. Se o numero
+tiver pixel/dataset ou conta do Google proprios, o evento vai pra la; se nao
+tiver, cai nos destinos globais. Quem resolve isso e `_cfg_for_contact`.
+"""
 
 import uuid
 
@@ -8,9 +13,10 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
-from app.models import Contact, Conversion
+from app.models import Contact, Conversion, WaNumber
 from app.services.dispatch import ALL_DESTINATIONS, dispatch_conversion, enabled_destinations
 
 router = APIRouter(prefix="/api", tags=["conversions"])
@@ -44,6 +50,7 @@ def serialize_conversion(c: Conversion, contact: Contact | None = None) -> dict:
     }
     if contact is not None:
         out["contact"] = {"id": contact.id, "wa_id": contact.wa_id, "name": contact.name}
+        out["wa_number_id"] = contact.wa_number_id
     return out
 
 
@@ -57,20 +64,32 @@ class ConversionIn(BaseModel):
     destinations: list[str] = Field(default_factory=list)
 
 
-@router.get("/conversions")
-async def list_conversions(limit: int = Query(default=100, le=500), session: AsyncSession = Depends(get_session)):
-    rows = (
-        (
-            await session.execute(
-                select(Conversion)
-                .options(selectinload(Conversion.dispatches), selectinload(Conversion.contact))
-                .order_by(desc(Conversion.id))
-                .limit(limit)
-            )
-        )
-        .scalars()
-        .all()
+async def _cfg_for_contact(session: AsyncSession, contact: Contact) -> dict:
+    """Config efetiva da linha do contato (com fallback no global)."""
+    global_cfg = await settings_store.load(session)
+    number = (
+        await session.get(WaNumber, contact.wa_number_id) if contact.wa_number_id is not None else None
     )
+    return numbers_service.effective_cfg(global_cfg, number)
+
+
+@router.get("/conversions")
+async def list_conversions(
+    number_id: int | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    stmt = (
+        select(Conversion)
+        .options(selectinload(Conversion.dispatches), selectinload(Conversion.contact))
+        .order_by(desc(Conversion.id))
+        .limit(limit)
+    )
+    if number_id is not None:
+        stmt = stmt.join(Contact, Contact.id == Conversion.contact_id).where(
+            Contact.wa_number_id == number_id
+        )
+    rows = (await session.execute(stmt)).scalars().all()
     return [serialize_conversion(c, c.contact) for c in rows]
 
 
@@ -80,7 +99,7 @@ async def create_conversion(payload: ConversionIn, session: AsyncSession = Depen
     if contact is None:
         raise HTTPException(status_code=404, detail="Contato nao encontrado.")
 
-    cfg = await settings_store.load(session)
+    cfg = await _cfg_for_contact(session, contact)
     invalid = [d for d in payload.destinations if d not in ALL_DESTINATIONS]
     if invalid:
         raise HTTPException(status_code=400, detail=f"Destino invalido: {', '.join(invalid)}")
@@ -89,7 +108,8 @@ async def create_conversion(payload: ConversionIn, session: AsyncSession = Depen
     if not targets:
         raise HTTPException(
             status_code=400,
-            detail="Nenhum destino habilitado. Ative ao menos um em Configuracoes ou escolha na hora do disparo.",
+            detail="Nenhum destino habilitado para essa linha. Ative um em Destinos (global) ou "
+            "nos destinos do próprio número — ou escolha na hora do disparo.",
         )
 
     conv = Conversion(
@@ -134,7 +154,7 @@ async def retry_conversion(
     if contact is None:
         raise HTTPException(status_code=404, detail="Contato da conversao nao existe mais.")
 
-    cfg = await settings_store.load(session)
+    cfg = await _cfg_for_contact(session, contact)
     targets = destinations or [d.destination for d in conv.dispatches if d.status == "error"] or None
     await dispatch_conversion(session, cfg, conv, contact, targets)
 
@@ -153,7 +173,7 @@ async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depe
     if contact is None:
         raise HTTPException(status_code=404, detail="Contato nao encontrado.")
 
-    cfg = await settings_store.load(session)
+    cfg = await _cfg_for_contact(session, contact)
     from datetime import datetime, timezone
 
     from app.services import google_ads, meta_capi

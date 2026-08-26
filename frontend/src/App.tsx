@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api, type Stats } from './api'
+import { NumberProvider, useNumber } from './numberContext'
 import Connection from './tabs/Connection'
+import Numbers from './tabs/Numbers'
 import Conversions from './tabs/Conversions'
 import Crm from './tabs/Crm'
 import Destinations from './tabs/Destinations'
@@ -10,6 +12,7 @@ import Manual from './tabs/Manual'
 import Prospecting from './tabs/Prospecting'
 
 const TABS = [
+  { id: 'numbers', label: 'Números' },
   { id: 'connection', label: 'Conexão' },
   { id: 'prospecting', label: 'Prospecção' },
   { id: 'crm', label: 'CRM' },
@@ -32,13 +35,49 @@ function Stat({ label, value, accent }: { label: string; value: string | number;
   )
 }
 
-export default function App() {
-  const [tab, setTab] = useState<TabId>('connection')
+/** Seletor da linha em uso. Tudo que as abas mostram passa por ele. */
+function NumberPicker() {
+  const { numbers, numberId, setNumberId, current, loading } = useNumber()
+
+  if (loading) return <span className="text-xs text-ink-500">carregando linhas…</span>
+  if (numbers.length === 0) {
+    return <span className="text-xs text-amber-300">nenhuma linha cadastrada — comece em Números</span>
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] uppercase tracking-wide text-ink-500">Linha</span>
+      <select
+        value={numberId ?? 'all'}
+        onChange={(e) => setNumberId(e.target.value === 'all' ? undefined : Number(e.target.value))}
+        className="rounded-lg border border-ink-700 bg-ink-850 px-2.5 py-1.5 text-sm text-ink-100"
+      >
+        {numbers.map((n) => (
+          <option key={n.id} value={n.id}>
+            {n.label}
+            {n.display_phone_number ? ` · ${n.display_phone_number}` : ''}
+            {n.active ? '' : ' (inativa)'}
+          </option>
+        ))}
+        <option value="all">Todas as linhas</option>
+      </select>
+      {current && !current.active && <span className="text-[11px] text-amber-300">linha inativa</span>}
+      {!current && <span className="text-[11px] text-ink-500">visão consolidada</span>}
+    </div>
+  )
+}
+
+function Shell() {
+  const [tab, setTab] = useState<TabId>('numbers')
   const [stats, setStats] = useState<Stats | null>(null)
+  const { numberId } = useNumber()
 
   const refresh = useCallback(() => {
-    void api.stats().then(setStats).catch(() => setStats(null))
-  }, [])
+    void api
+      .stats(numberId)
+      .then(setStats)
+      .catch(() => setStats(null))
+  }, [numberId])
 
   useEffect(refresh, [refresh])
 
@@ -53,6 +92,9 @@ export default function App() {
             <p className="mt-0.5 text-xs text-ink-500">
               Varredura por raio → abordagem ativa → resposta no WhatsApp → conversão na campanha
             </p>
+            <div className="mt-3">
+              <NumberPicker />
+            </div>
           </div>
           {stats && (
             <div className="flex flex-wrap gap-7">
@@ -84,6 +126,7 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
+        {tab === 'numbers' && <Numbers onChanged={refresh} />}
         {tab === 'connection' && <Connection onChanged={refresh} />}
         {tab === 'prospecting' && <Prospecting onChanged={refresh} />}
         {tab === 'crm' && <Crm onChanged={refresh} />}
@@ -93,5 +136,13 @@ export default function App() {
         {tab === 'manual' && <Manual onNavigate={(t) => setTab(t as TabId)} />}
       </main>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <NumberProvider>
+      <Shell />
+    </NumberProvider>
   )
 }

@@ -27,6 +27,8 @@ async def get_session():
 
 async def init_db() -> None:
     from app import models  # noqa: F401  (registra as tabelas no metadata)
+    from app.migrations import upgrade
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(upgrade)

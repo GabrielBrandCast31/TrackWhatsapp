@@ -1,7 +1,7 @@
 # WhatsApp CRM & Conversion Tracker
 
-Plataforma para conectar um número de WhatsApp (Cloud API oficial) com dois fluxos
-que se encontram no mesmo funil:
+Plataforma para gerir **vários números de WhatsApp** (Cloud API oficial) num mesmo
+sistema, cada um com dois fluxos que se encontram no mesmo funil:
 
 - **Passivo** — captura leads vindos de anúncios **Click to WhatsApp** com o
   identificador de clique e dispara o evento de conversão de volta para a campanha.
@@ -11,6 +11,10 @@ que se encontram no mesmo funil:
 
 Destinos de conversão suportados: **Meta Conversions API**, **Google Ads (conversões
 offline)** e **webhook genérico** (n8n / Make / GTM server-side).
+
+Cada número é uma **linha isolada**: credenciais próprias, base de leads e prospects
+própria, e destinos de conversão próprios. Um seletor no topo do painel define qual
+linha você está olhando; *Todas as linhas* dá a visão consolidada.
 
 ## Como o rastreio funciona
 
@@ -51,6 +55,38 @@ cd backend && python3.11 -m venv .venv && .venv/bin/pip install -r requirements.
 cd frontend && npm install && npm run dev
 ```
 
+## Vários números na mesma instalação
+
+Aba **Números**: cada linha tem seu Phone Number ID, Access Token, WABA, verify token
+e app secret. A primeira linha cadastrada vira a **padrão** (é para ela que caem os
+webhooks de números ainda não cadastrados, e é ela que as ações usam quando você está
+em *Todas as linhas*).
+
+O que fica separado por linha:
+
+| Isolado por linha | Compartilhado |
+|---|---|
+| leads, mensagens e atribuição | token do Apify e idioma da varredura |
+| prospects, varreduras e CRM | destinos globais (herdados por quem não sobrescreve) |
+| abordagem ativa: template, cap diário e intervalo | — |
+| destinos de conversão, se a linha definir os seus | — |
+
+**Duas formas de montar o webhook na Meta**, e o painel mostra as duas URLs:
+
+- `…/webhook/whatsapp` — **URL única**, para vários números no mesmo app da Meta. A
+  mensagem é roteada pelo `phone_number_id` que vem no payload.
+- `…/webhook/whatsapp/{id}` — **URL exclusiva da linha**, para quando cada cliente tem
+  o próprio app. Valida o verify token e o app secret só daquela linha.
+
+**Destinos por linha**: em *Números → editar*, cada campo de destino em branco significa
+"herda o global" (aba **Destinos**). Preencha o Pixel/Dataset e o token da linha para
+mandar a conversão dela para a conta de anúncios do cliente certo.
+
+Removendo uma linha, você escolhe: manter a base (os leads e prospects ficam sem dono e
+só aparecem em *Todas as linhas*, e podem ser adotados por outra linha depois) ou apagar
+tudo junto. Quem já usava a versão de número único não perde nada: na primeira subida a
+configuração antiga vira a linha #1 e toda a base existente é vinculada a ela.
+
 ## Configurar a conexão
 
 A Meta exige HTTPS público no webhook. Em dev:
@@ -61,7 +97,7 @@ ngrok http 8030          # o frontend faz proxy de /webhook e /api pro backend
 
 Ponha o host do ngrok em `PUBLIC_BASE_URL` no `.env` e reinicie o backend.
 
-Depois, na aba **Conexão** do painel:
+Depois, na aba **Números** do painel, adicione a linha:
 
 | Campo | Onde achar |
 |---|---|
@@ -75,9 +111,10 @@ Para a prospecção, preencha também o **token do Apify** na aba *Prospecção 
 → configurar* (Console do Apify → Settings → Integrations → API token). Se ele estiver no
 `.env` como `APIFY_TOKEN`, já vem preenchido.
 
-No painel da Meta (WhatsApp → Configuration → Webhook), cole a URL que o painel
-mostra (`https://SEU-NGROK/webhook/whatsapp`), o mesmo Verify Token, e **assine o
-campo `messages`**. Volte no painel e clique em *Testar conexão* e *Assinar webhooks*.
+No painel da Meta (WhatsApp → Configuration → Webhook), cole a URL que a aba **Conexão**
+mostra (a única ou a exclusiva da linha), o mesmo Verify Token, e **assine o campo
+`messages`**. Volte no painel e clique em *Testar conexão* e *Assinar webhooks* — os dois
+botões agem sobre a linha selecionada no topo.
 
 ## Testar sem gastar clique em anúncio
 
@@ -200,9 +237,12 @@ backend/app/
   tracking.py             extração de ctwa_clid / gclid / wbraid / UTMs
   phones.py               E.164, celular vs fixo, chave canônica do nono dígito
   settings_store.py       config env + override no banco, com mascaramento de segredo
-  models.py               contacts, messages, conversions, dispatches, webhook_logs,
-                          prospect_searches, prospects, outreaches
-  routers/                config, webhook, contacts, conversions, prospecting
+  models.py               wa_numbers, contacts, messages, conversions, dispatches,
+                          webhook_logs, prospect_searches, prospects, outreaches
+  numbers.py              resolve a linha em jogo e funde credenciais + overrides no
+                          formato de config que o resto do sistema já consumia
+  migrations.py           ALTER TABLE idempotente rodado no startup
+  routers/                config, numbers, webhook, contacts, conversions, prospecting
   services/
     whatsapp_cloud.py     Graph API: status, subscribe, envio de texto e template
     apify.py              dispara o actor, acompanha o run, normaliza o lugar
@@ -221,7 +261,14 @@ backend/app/
 - O webhook responde 200 mesmo em erro de processamento — a Meta reentrega em loop
   caso contrário, e reentregar um payload quebrado não resolve nada. O erro fica no log.
 - Sem App Secret configurado, a validação de assinatura é ignorada. Preencha antes de
-  expor isso em produção.
+  expor isso em produção. Na URL compartilhada, a assinatura é conferida contra o segredo
+  das linhas citadas no payload; na URL exclusiva, só contra o da própria linha.
+- O cap diário e o intervalo da abordagem contam **por linha** — cada número tem a sua
+  reputação na Meta, então somar o volume de todos penalizaria quem não disparou. Uma
+  linha com a abordagem desligada não trava a fila das outras: os disparos dela ficam
+  esperando na fila até você ligar.
+- O dedupe do import de prospects também é por linha: a mesma empresa pode ser lead de
+  dois clientes diferentes sem uma varredura anular a outra.
 - A sincronização da varredura é preguiçosa: as rotas de listagem conferem no Apify
   qualquer busca ainda rodando e importam quando termina. Sem worker separado, nada fica
   pendurado se o processo reiniciar — e ainda dá pra forçar com *sincronizar*.

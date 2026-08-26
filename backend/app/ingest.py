@@ -5,6 +5,11 @@ clique no anuncio. Por isso, quando ele chega a gente grava na hora; nas
 mensagens seguintes o contato ja carrega a atribuicao, e a gente so preenche
 campos que ainda estiverem vazios (nunca sobrescreve uma atribuicao existente
 com None).
+
+Multi-numero: um mesmo webhook pode carregar mensagens de linhas diferentes, e o
+roteamento sai do `metadata.phone_number_id` de cada change. Contato e prospect
+sao escopados pelo numero — a mesma pessoa falando com duas linhas vira dois
+leads, cada um com a atribuicao da campanha daquela linha.
 """
 
 from datetime import datetime, timezone
@@ -12,8 +17,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import phones
-from app.models import Contact, Message, Prospect, WebhookLog
+from app import numbers, phones
+from app.models import Contact, Message, Prospect, WaNumber, WebhookLog
 from app.tracking import extract, to_e164
 
 _ATTRIBUTION_FIELDS = (
@@ -56,15 +61,26 @@ def _ts(message: dict) -> datetime:
 
 
 async def _upsert_contact(
-    session: AsyncSession, wa_id: str, name: str | None, attribution: dict, phone_number_id: str | None
+    session: AsyncSession,
+    wa_id: str,
+    name: str | None,
+    attribution: dict,
+    phone_number_id: str | None,
+    wa_number_id: int | None,
 ) -> tuple[Contact, bool]:
-    result = await session.execute(select(Contact).where(Contact.wa_id == wa_id))
-    contact = result.scalar_one_or_none()
+    stmt = select(Contact).where(Contact.wa_id == wa_id)
+    if wa_number_id is not None:
+        # contato ainda sem dono (base pre-multinumero) e adotado pela linha que o atendeu
+        stmt = stmt.where(Contact.wa_number_id.is_(None) | (Contact.wa_number_id == wa_number_id))
+    result = await session.execute(stmt.order_by(Contact.wa_number_id.is_(None), Contact.id))
+    contact = result.scalars().first()
     created = contact is None
 
     if contact is None:
-        contact = Contact(wa_id=wa_id, phone_e164=to_e164(wa_id), utm={})
+        contact = Contact(wa_id=wa_id, phone_e164=to_e164(wa_id), utm={}, wa_number_id=wa_number_id)
         session.add(contact)
+    elif contact.wa_number_id is None and wa_number_id is not None:
+        contact.wa_number_id = wa_number_id
 
     if name and not contact.name:
         contact.name = name
@@ -98,17 +114,17 @@ async def _link_prospect(session: AsyncSession, contact: Contact) -> int | None:
 
     # os 8 ultimos digitos nao mudam com o nono digito — filtram no banco antes
     # de a comparacao canonica confirmar o par.
-    candidates = (
-        (
-            await session.execute(
-                select(Prospect)
-                .where(Prospect.phone_e164.like(f"%{key[-8:]}"))
-                .where(Prospect.contact_id.is_(None) | (Prospect.contact_id == contact.id))
-            )
-        )
-        .scalars()
-        .all()
+    stmt = (
+        select(Prospect)
+        .where(Prospect.phone_e164.like(f"%{key[-8:]}"))
+        .where(Prospect.contact_id.is_(None) | (Prospect.contact_id == contact.id))
     )
+    if contact.wa_number_id is not None:
+        # so fecha o ciclo com prospect da MESMA linha: cliente A nao herda resposta do cliente B
+        stmt = stmt.where(
+            Prospect.wa_number_id.is_(None) | (Prospect.wa_number_id == contact.wa_number_id)
+        )
+    candidates = (await session.execute(stmt)).scalars().all()
     for prospect in candidates:
         if phones.match_key(prospect.phone_e164) != key:
             continue
@@ -121,13 +137,51 @@ async def _link_prospect(session: AsyncSession, contact: Contact) -> int | None:
     return None
 
 
-async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
-    """Processa um POST do webhook. Devolve um resumo do que entrou."""
+def change_key(change: dict) -> str:
+    """Linha que um change endereca. String vazia = payload sem metadata."""
+    pnid = ((change.get("value") or {}).get("metadata") or {}).get("phone_number_id")
+    return str(pnid) if pnid else ""
+
+
+def payload_phone_number_ids(payload: dict) -> list[str]:
+    """Todas as linhas citadas no payload — o webhook autoriza uma por uma."""
+    found: list[str] = []
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            if change.get("field") != "messages":
+                continue
+            key = change_key(change)
+            if key not in found:
+                found.append(key)
+    return found
+
+
+async def ingest_payload(
+    session: AsyncSession,
+    payload: dict,
+    fallback_number: WaNumber | None = None,
+    allowed_phone_number_ids: set[str] | None = None,
+) -> dict:
+    """Processa um POST do webhook. Devolve um resumo do que entrou.
+
+    `fallback_number` cobre dois casos: payload de simulacao e webhook de uma linha
+    que ainda nao foi cadastrada (a mensagem entra no numero padrao em vez de sumir).
+
+    `allowed_phone_number_ids` e a lista de linhas que ESTA requisicao provou poder
+    escrever (veja `routers/webhook.py`). Change de linha fora dela e descartado: um
+    payload assinado com o segredo do cliente A nao grava nada na base do cliente B.
+    `None` desliga a checagem — usado so pelo simulador, que nao vem da internet.
+    """
     contacts_touched: list[int] = []
     prospects_replied: list[int] = []
+    numbers_touched: list[int] = []
     new_contacts = 0
     messages_saved = 0
     statuses = 0
+    log_phone_number_id: str | None = None
+    log_number_id: int | None = None
+    unknown_lines: list[str] = []
+    blocked_lines: list[str] = []
 
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
@@ -136,6 +190,25 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
                 continue
 
             phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+            key = change_key(change)
+            if allowed_phone_number_ids is not None and key not in allowed_phone_number_ids:
+                label = key or "sem metadata"
+                if label not in blocked_lines:
+                    blocked_lines.append(label)
+                continue
+
+            matched = await numbers.by_phone_number_id(session, phone_number_id)
+            if matched is None and phone_number_id and str(phone_number_id) not in unknown_lines:
+                unknown_lines.append(str(phone_number_id))
+            wa_number = matched or fallback_number
+            wa_number_id = wa_number.id if wa_number else None
+            log_phone_number_id = log_phone_number_id or (
+                str(phone_number_id) if phone_number_id else None
+            )
+            log_number_id = log_number_id or wa_number_id
+            if wa_number_id is not None and wa_number_id not in numbers_touched:
+                numbers_touched.append(wa_number_id)
+
             profiles = {c.get("wa_id"): (c.get("profile") or {}).get("name") for c in value.get("contacts") or []}
             statuses += len(value.get("statuses") or [])
 
@@ -147,7 +220,7 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
                 text = _text_of(message)
                 attribution = extract(message.get("referral"), text)
                 contact, created = await _upsert_contact(
-                    session, wa_id, profiles.get(wa_id), attribution, phone_number_id
+                    session, wa_id, profiles.get(wa_id), attribution, phone_number_id, wa_number_id
                 )
                 if created:
                     new_contacts += 1
@@ -187,7 +260,20 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
     )
     if prospects_replied:
         summary += f", {len(set(prospects_replied))} prospect(s) respondeu"
-    session.add(WebhookLog(payload=payload, summary=summary))
+    if blocked_lines:
+        summary += f" — {len(blocked_lines)} linha(s) barrada(s) por assinatura: {', '.join(blocked_lines)}"
+    if unknown_lines:
+        # sem isso, uma linha nova cairia no numero padrao sem ninguem notar
+        destino = "caiu no número padrão" if log_number_id is not None else "sem destino"
+        summary += f" — linha {', '.join(unknown_lines)} nao cadastrada ({destino})"
+    session.add(
+        WebhookLog(
+            payload=payload,
+            summary=summary,
+            phone_number_id=log_phone_number_id,
+            wa_number_id=log_number_id,
+        )
+    )
     await session.commit()
 
     return {
@@ -196,6 +282,8 @@ async def ingest_payload(session: AsyncSession, payload: dict) -> dict:
         "statuses": statuses,
         "contact_ids": sorted(set(contacts_touched)),
         "prospect_ids": sorted(set(prospects_replied)),
+        "wa_number_ids": numbers_touched,
+        "blocked_lines": blocked_lines,
         "summary": summary,
     }
 

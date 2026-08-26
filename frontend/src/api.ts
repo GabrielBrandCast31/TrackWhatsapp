@@ -57,6 +57,7 @@ export type Attribution = {
 export type Contact = {
   id: number
   wa_id: string
+  wa_number_id: number | null
   phone_e164: string | null
   name: string | null
   first_message: string | null
@@ -99,6 +100,7 @@ export type Conversion = {
 }
 
 export type ConnectionStatus = {
+  number_id?: number
   configured: boolean
   connected: boolean
   phone_number: Record<string, string> | null
@@ -110,9 +112,43 @@ export type ConfigResponse = {
   config: Record<string, unknown>
   webhook_url: string
   enabled_destinations: string[]
+  default_number_id: number | null
+  overridable_fields: string[]
 }
 
+// --- linhas de WhatsApp ---
+
+export type WaNumber = {
+  id: number
+  label: string
+  phone_number_id: string
+  business_account_id: string | null
+  verify_token: string | null
+  graph_version: string | null
+  display_phone_number: string | null
+  verified_name: string | null
+  quality_rating: string | null
+  last_checked_at: string | null
+  last_error: string | null
+  active: boolean
+  is_default: boolean
+  note: string | null
+  created_at: string
+  overrides: Record<string, unknown>
+  access_token__set: boolean
+  access_token__hint: string
+  app_secret__set: boolean
+  app_secret__hint: string
+  webhook_url: string
+  enabled_destinations?: string[]
+  outreach_enabled?: boolean
+  counts?: { contacts: number; prospects: number; outreach_sent: number; conversions: number }
+}
+
+export type Orphans = { contacts: number; prospects: number; searches: number; total: number }
+
 export type Stats = {
+  numbers: number
   contacts: number
   attributed_contacts: number
   conversions: number
@@ -141,6 +177,7 @@ export type GeoResult = { label: string; lat: number; lng: number; kind: string 
 export type ProspectSearch = {
   id: number
   label: string
+  wa_number_id: number | null
   terms: string[]
   center: { lat: number; lng: number }
   radius_km: number
@@ -166,6 +203,7 @@ export type ProspectSearch = {
 export type Outreach = {
   id: number
   prospect_id: number
+  wa_number_id: number | null
   prospect_name?: string | null
   kind: 'template' | 'text'
   template_name: string | null
@@ -185,6 +223,7 @@ export type Outreach = {
 export type Prospect = {
   id: number
   search_id: number | null
+  wa_number_id: number | null
   place_id: string | null
   name: string
   category: string | null
@@ -246,6 +285,7 @@ export type WaTemplate = {
 export type ProspectFilters = {
   stage?: string
   search_id?: number
+  number_id?: number
   q?: string
   only_mobile?: boolean
   only_with_phone?: boolean
@@ -264,7 +304,8 @@ function qs(params: Record<string, unknown>): string {
 export const prospectApi = {
   account: () => request<ApifyAccount>('/api/prospect/account'),
   geocode: (q: string) => request<{ results: GeoResult[] }>(`/api/prospect/geocode?q=${encodeURIComponent(q)}`),
-  searches: () => request<ProspectSearch[]>('/api/prospect/searches'),
+  searches: (numberId?: number) =>
+    request<ProspectSearch[]>(`/api/prospect/searches${qs({ number_id: numberId })}`),
   createSearch: (payload: Record<string, unknown>) =>
     request<ProspectSearch>('/api/prospect/searches', { method: 'POST', body: JSON.stringify(payload) }),
   syncSearch: (id: number) =>
@@ -278,40 +319,82 @@ export const prospectApi = {
   patchProspect: (id: number, patch: Record<string, unknown>) =>
     request<Prospect>(`/api/prospect/prospects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteProspect: (id: number) => request<void>(`/api/prospect/prospects/${id}`, { method: 'DELETE' }),
-  pipeline: () => request<Pipeline>('/api/prospect/pipeline'),
-  templates: () => request<WaTemplate[]>('/api/prospect/templates'),
+  pipeline: (numberId?: number) => request<Pipeline>(`/api/prospect/pipeline${qs({ number_id: numberId })}`),
+  templates: (numberId?: number) =>
+    request<WaTemplate[]>(`/api/prospect/templates${qs({ number_id: numberId })}`),
   outreachOne: (id: number, payload: Record<string, unknown>) =>
     request<Outreach>(`/api/prospect/prospects/${id}/outreach`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
   outreachBulk: (payload: Record<string, unknown>) =>
-    request<{ queued: number; skipped: { id: number; name: string; reason: string }[]; cap: number }>(
+    request<{
+      queued: number
+      skipped: { id: number; name: string; reason: string }[]
+      cap: Record<string, number | null>
+    }>(
       '/api/prospect/outreach/bulk',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
-  outreachLog: (status?: string) =>
-    request<Outreach[]>(`/api/prospect/outreach${qs({ status })}`),
-  drain: () => request<{ pending: number }>('/api/prospect/outreach/drain', { method: 'POST' }),
+  outreachLog: (status?: string, numberId?: number) =>
+    request<Outreach[]>(`/api/prospect/outreach${qs({ status, number_id: numberId })}`),
+  drain: (numberId?: number) =>
+    request<{ pending: number }>(`/api/prospect/outreach/drain${qs({ number_id: numberId })}`, {
+      method: 'POST',
+    }),
   csvUrl: (filters: ProspectFilters = {}) =>
     `${BASE}/api/prospect/prospects.csv${qs(filters as Record<string, unknown>)}`,
 }
 
+export const numbersApi = {
+  list: () => request<WaNumber[]>('/api/numbers'),
+  get: (id: number) => request<WaNumber>(`/api/numbers/${id}`),
+  create: (payload: Record<string, unknown>) =>
+    request<WaNumber>('/api/numbers', { method: 'POST', body: JSON.stringify(payload) }),
+  patch: (id: number, patch: Record<string, unknown>) =>
+    request<WaNumber>(`/api/numbers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  remove: (id: number, purge = false) =>
+    request<void>(`/api/numbers/${id}${qs({ purge })}`, { method: 'DELETE' }),
+  status: (id: number) => request<ConnectionStatus>(`/api/numbers/${id}/status`),
+  subscribe: (id: number) => request<unknown>(`/api/numbers/${id}/subscribe`, { method: 'POST' }),
+  sendTest: (id: number, to: string, body: string) =>
+    request<unknown>(`/api/numbers/${id}/send-test`, {
+      method: 'POST',
+      body: JSON.stringify({ to, body }),
+    }),
+  templates: (id: number) => request<WaTemplate[]>(`/api/numbers/${id}/templates`),
+  orphans: () => request<Orphans>('/api/numbers/orphans'),
+  adoptOrphans: (id: number) =>
+    request<{ number_id: number; adopted: Record<string, number> }>(
+      `/api/numbers/${id}/adopt-orphans`,
+      { method: 'POST' },
+    ),
+}
+
 export const api = {
-  stats: () => request<Stats>('/api/stats'),
+  stats: (numberId?: number) => request<Stats>(`/api/stats${qs({ number_id: numberId })}`),
   getConfig: () => request<ConfigResponse>('/api/config'),
   putConfig: (patch: Record<string, unknown>) =>
     request<ConfigResponse>('/api/config', { method: 'PUT', body: JSON.stringify(patch) }),
-  connectionStatus: () => request<ConnectionStatus>('/api/connection/status'),
-  subscribe: () => request<unknown>('/api/connection/subscribe', { method: 'POST' }),
-  sendTest: (to: string, body: string) =>
-    request<unknown>('/api/connection/send-test', { method: 'POST', body: JSON.stringify({ to, body }) }),
-  contacts: (onlyAttributed = false) =>
-    request<Contact[]>(`/api/contacts?only_attributed=${onlyAttributed}`),
+  connectionStatus: (numberId?: number) =>
+    request<ConnectionStatus>(`/api/connection/status${qs({ number_id: numberId })}`),
+  subscribe: (numberId?: number) =>
+    request<unknown>(`/api/connection/subscribe${qs({ number_id: numberId })}`, { method: 'POST' }),
+  sendTest: (to: string, body: string, numberId?: number) =>
+    request<unknown>(`/api/connection/send-test${qs({ number_id: numberId })}`, {
+      method: 'POST',
+      body: JSON.stringify({ to, body }),
+    }),
+  contacts: (onlyAttributed = false, numberId?: number) =>
+    request<Contact[]>(`/api/contacts${qs({ only_attributed: onlyAttributed, number_id: numberId })}`),
   contact: (id: number) => request<ContactDetail>(`/api/contacts/${id}`),
-  simulate: (payload: Record<string, unknown>) =>
-    request<unknown>('/api/contacts/simulate', { method: 'POST', body: JSON.stringify(payload) }),
-  conversions: () => request<Conversion[]>('/api/conversions'),
+  simulate: (payload: Record<string, unknown>, numberId?: number) =>
+    request<unknown>(`/api/contacts/simulate${qs({ number_id: numberId })}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  conversions: (numberId?: number) =>
+    request<Conversion[]>(`/api/conversions${qs({ number_id: numberId })}`),
   fire: (payload: Record<string, unknown>) =>
     request<Conversion>('/api/conversions', { method: 'POST', body: JSON.stringify(payload) }),
   preview: (payload: Record<string, unknown>) =>
@@ -320,8 +403,17 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   retry: (id: number) => request<Conversion>(`/api/conversions/${id}/retry`, { method: 'POST' }),
-  webhookLogs: () =>
-    request<{ id: number; summary: string; created_at: string; payload: unknown }[]>('/api/webhook-logs'),
+  webhookLogs: (numberId?: number) =>
+    request<
+      {
+        id: number
+        summary: string
+        created_at: string
+        wa_number_id: number | null
+        phone_number_id: string | null
+        payload: unknown
+      }[]
+    >(`/api/webhook-logs${qs({ number_id: numberId })}`),
 }
 
 export const DESTINATION_LABEL: Record<string, string> = {

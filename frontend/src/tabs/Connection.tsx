@@ -1,61 +1,43 @@
 import { useEffect, useState } from 'react'
 
-import { api, type ConfigResponse, type ConnectionStatus } from '../api'
-import { Badge, Banner, Button, Card, Copy, Field, Input, Json, when } from '../ui'
+import { api, numbersApi, type ConfigResponse, type ConnectionStatus } from '../api'
+import { useNumber } from '../numberContext'
+import { Badge, Banner, Button, Card, Copy, Empty, Input, Json, when } from '../ui'
 
-const WA_FIELDS: { key: string; label: string; hint?: string; secret?: boolean }[] = [
-  {
-    key: 'wa_access_token',
-    label: 'Access Token',
-    hint: 'Token permanente do System User com whatsapp_business_messaging. Meta > Business Settings > Usuários do sistema.',
-    secret: true,
-  },
-  {
-    key: 'wa_phone_number_id',
-    label: 'Phone Number ID',
-    hint: 'Meta for Developers > WhatsApp > API Setup. Não é o número — é o ID numérico.',
-  },
-  {
-    key: 'wa_business_account_id',
-    label: 'WhatsApp Business Account ID (WABA)',
-    hint: 'Necessário para assinar os webhooks e conferir a assinatura.',
-  },
-  {
-    key: 'wa_verify_token',
-    label: 'Verify Token',
-    hint: 'Você inventa. Cole o mesmo valor no campo "Verify token" do webhook no painel da Meta.',
-  },
-  {
-    key: 'wa_app_secret',
-    label: 'App Secret',
-    hint: 'Valida a assinatura X-Hub-Signature-256. Em branco, a validação é ignorada (só use assim em teste local).',
-    secret: true,
-  },
-]
-
+/** Diagnostico da linha selecionada.
+ *
+ * As credenciais de cada numero vivem na aba Números — aqui e onde voce confere
+ * se a linha esta de pe: webhook certo, número respondendo, mensagens chegando.
+ */
 export default function Connection({ onChanged }: { onChanged: () => void }) {
+  const { numberId, current, numbers, labelOf } = useNumber()
   const [cfg, setCfg] = useState<ConfigResponse | null>(null)
-  const [draft, setDraft] = useState<Record<string, string>>({})
   const [status, setStatus] = useState<ConnectionStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
   const [testTo, setTestTo] = useState('')
-  const [logs, setLogs] = useState<{ id: number; summary: string; created_at: string; payload: unknown }[]>([])
+  const [logs, setLogs] = useState<
+    {
+      id: number
+      summary: string
+      created_at: string
+      wa_number_id: number | null
+      phone_number_id: string | null
+      payload: unknown
+    }[]
+  >([])
 
-  const load = async () => {
-    const data = await api.getConfig()
-    setCfg(data)
-    setDraft(
-      Object.fromEntries(
-        WA_FIELDS.filter((f) => !f.secret).map((f) => [f.key, String(data.config[f.key] ?? '')]),
-      ),
-    )
-  }
+  const loadLogs = () => void api.webhookLogs(numberId).then(setLogs).catch(() => setLogs([]))
 
   useEffect(() => {
-    void load()
-    void api.webhookLogs().then(setLogs)
+    void api.getConfig().then(setCfg)
   }, [])
+
+  useEffect(() => {
+    setStatus(null)
+    setMsg(null)
+    loadLogs()
+  }, [numberId])
 
   const run = async (name: string, fn: () => Promise<void>) => {
     setBusy(name)
@@ -69,18 +51,12 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  const save = () =>
-    run('save', async () => {
-      await api.putConfig(draft)
-      await load()
-      setMsg({ tone: 'good', text: 'Credenciais salvas.' })
-      onChanged()
-    })
-
   const check = () =>
     run('check', async () => {
-      const s = await api.connectionStatus()
+      if (numberId === undefined) throw new Error('Escolha uma linha no topo para testar a conexão.')
+      const s = await numbersApi.status(numberId)
       setStatus(s)
+      onChanged()
       setMsg(
         s.connected
           ? { tone: 'good', text: 'Número respondeu na Graph API.' }
@@ -90,74 +66,84 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
 
   if (!cfg) return <p className="text-sm text-ink-500">carregando…</p>
 
-  const secretSet = (key: string) => Boolean(cfg.config[`${key}__set`])
-  const secretHint = (key: string) => String(cfg.config[`${key}__hint`] ?? '')
+  if (numbers.length === 0) {
+    return (
+      <Card title="Nenhuma linha cadastrada">
+        <Empty>
+          Vá em <strong className="text-ink-100">Números</strong> e cadastre o primeiro número de
+          WhatsApp. Sem isso, não há webhook para configurar na Meta.
+        </Empty>
+      </Card>
+    )
+  }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-      <Card
-        title="Credenciais da WhatsApp Cloud API"
-        subtitle="Campos de segredo em branco mantêm o valor já salvo."
-        actions={
-          <Button variant="primary" onClick={save} disabled={busy === 'save'}>
-            {busy === 'save' ? 'salvando…' : 'Salvar'}
-          </Button>
-        }
-      >
-        <div className="space-y-4">
-          {WA_FIELDS.map((f) => (
-            <Field
-              key={f.key}
-              label={f.label}
-              hint={f.secret && secretSet(f.key) ? `Salvo (${secretHint(f.key)}). ${f.hint ?? ''}` : f.hint}
-            >
-              <Input
-                type={f.secret ? 'password' : 'text'}
-                value={draft[f.key] ?? ''}
-                placeholder={f.secret && secretSet(f.key) ? '•••••••• (mantém o atual)' : ''}
-                onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
-              />
-            </Field>
-          ))}
-          {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
-        </div>
-      </Card>
-
+    <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
       <div className="space-y-5">
         <Card
           title="Webhook"
-          subtitle="Cole esta URL em Meta for Developers > WhatsApp > Configuration > Webhook e assine o campo messages."
+          subtitle="Cole a URL em Meta for Developers > WhatsApp > Configuration > Webhook e assine o campo messages."
         >
+          <p className="mb-2 text-[11px] uppercase tracking-wide text-ink-500">
+            URL única — serve todas as linhas
+          </p>
           <div className="flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-950 px-3 py-2">
             <code className="flex-1 truncate font-mono text-xs text-wa-500">{cfg.webhook_url}</code>
             <Copy text={cfg.webhook_url} />
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            A Meta só aceita HTTPS público. Em dev, exponha a porta 8000 com{' '}
-            <code className="font-mono text-ink-300">ngrok http 8000</code> e ajuste{' '}
-            <code className="font-mono text-ink-300">PUBLIC_BASE_URL</code> no .env.
+          <p className="mt-2 text-xs leading-relaxed text-ink-500">
+            A mensagem é roteada pelo <code className="font-mono text-ink-300">phone_number_id</code> que
+            a Meta manda no payload. Use esta se todos os números estiverem no mesmo app.
           </p>
+
+          {current && (
+            <>
+              <p className="mb-2 mt-5 text-[11px] uppercase tracking-wide text-ink-500">
+                URL exclusiva de {current.label}
+              </p>
+              <div className="flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-950 px-3 py-2">
+                <code className="flex-1 truncate font-mono text-xs text-wa-500">{current.webhook_url}</code>
+                <Copy text={current.webhook_url} />
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-ink-500">
+                Use esta quando o número estiver num app próprio — ela valida o verify token e o app
+                secret só dessa linha.
+              </p>
+            </>
+          )}
+
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={check} disabled={busy === 'check'}>
+            <Button onClick={check} disabled={busy === 'check' || numberId === undefined}>
               {busy === 'check' ? 'testando…' : 'Testar conexão'}
             </Button>
             <Button
               onClick={() =>
                 run('sub', async () => {
-                  await api.subscribe()
+                  if (numberId === undefined) throw new Error('Escolha uma linha no topo.')
+                  await numbersApi.subscribe(numberId)
                   setMsg({ tone: 'good', text: 'App assinado nos webhooks do WABA.' })
                   await check()
                 })
               }
-              disabled={busy === 'sub'}
+              disabled={busy === 'sub' || numberId === undefined}
             >
               Assinar webhooks
             </Button>
           </div>
+          {numberId === undefined && (
+            <p className="mt-3 text-xs text-amber-300">
+              Você está vendo todas as linhas. Escolha uma no topo para testar ou assinar.
+            </p>
+          )}
+          {msg && (
+            <div className="mt-4">
+              <Banner tone={msg.tone}>{msg.text}</Banner>
+            </div>
+          )}
         </Card>
 
         {status && (
-          <Card title="Status da conexão">
+          <Card title={`Status de ${current?.label ?? 'linha'}`}>
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={status.connected ? 'good' : 'bad'}>
                 {status.connected ? 'número ativo' : 'sem conexão'}
@@ -187,22 +173,28 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
             )}
           </Card>
         )}
+      </div>
 
-        <Card title="Mensagem de teste" subtitle="Só entrega dentro da janela de 24h após a pessoa te escrever.">
+      <div className="space-y-5">
+        <Card
+          title="Mensagem de teste"
+          subtitle={`Sai por ${current?.label ?? 'nenhuma linha'}. Só entrega dentro da janela de 24h.`}
+        >
           <div className="flex gap-2">
-            <Input
-              placeholder="5511999998888"
-              value={testTo}
-              onChange={(e) => setTestTo(e.target.value)}
-            />
+            <Input placeholder="5511999998888" value={testTo} onChange={(e) => setTestTo(e.target.value)} />
             <Button
               onClick={() =>
                 run('send', async () => {
-                  await api.sendTest(testTo, 'Teste de conexão da plataforma de trackeamento.')
+                  if (numberId === undefined) throw new Error('Escolha uma linha no topo.')
+                  await numbersApi.sendTest(
+                    numberId,
+                    testTo,
+                    'Teste de conexão da plataforma de trackeamento.',
+                  )
                   setMsg({ tone: 'good', text: 'Mensagem enviada.' })
                 })
               }
-              disabled={!testTo || busy === 'send'}
+              disabled={!testTo || busy === 'send' || numberId === undefined}
             >
               Enviar
             </Button>
@@ -211,18 +203,30 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
 
         <Card
           title="Últimos webhooks recebidos"
-          subtitle="Payload cru da Meta — a prova de que o tracking está chegando."
-          actions={<Button size="sm" onClick={() => void api.webhookLogs().then(setLogs)}>atualizar</Button>}
+          subtitle={
+            numberId === undefined
+              ? 'Payload cru da Meta, de todas as linhas.'
+              : `Payload cru da Meta que entrou por ${current?.label ?? 'esta linha'}.`
+          }
+          actions={
+            <Button size="sm" onClick={loadLogs}>
+              atualizar
+            </Button>
+          }
         >
           {logs.length === 0 ? (
             <p className="text-xs text-ink-500">Nada recebido ainda.</p>
           ) : (
             <ul className="space-y-2">
-              {logs.slice(0, 6).map((l) => (
+              {logs.slice(0, 8).map((l) => (
                 <li key={l.id}>
                   <details className="rounded-lg border border-ink-800 bg-ink-850">
                     <summary className="cursor-pointer px-3 py-2 text-xs text-ink-300">
-                      <span className="text-ink-500">{when(l.created_at)}</span> — {l.summary}
+                      <span className="text-ink-500">{when(l.created_at)}</span>
+                      {numberId === undefined && (
+                        <span className="text-ink-500"> · {labelOf(l.wa_number_id)}</span>
+                      )}{' '}
+                      — {l.summary}
                     </summary>
                     <div className="px-3 pb-3">
                       <Json value={l.payload} max={240} />
