@@ -48,6 +48,24 @@ class WaNumber(Base):
     verify_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     graph_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
+    # --- canal ---
+    # "evolution" (padrao, Evolution API) ou "cloud" (Cloud API oficial da Meta,
+    # que agora vive escondida na area de admin). O canal decide por onde a linha
+    # recebe mensagem e por onde ela envia.
+    channel: Mapped[str] = mapped_column(String(16), default="evolution")
+
+    # --- Evolution API ---
+    # `phone_number_id` da linha Evolution guarda a chave sintetica "evo:<instance>"
+    # (veja numbers.evo_routing_key): a coluna e NOT NULL e unica desde a versao
+    # Cloud-only, e reaproveita-la mantem roteamento e unicidade sem recriar tabela.
+    evo_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)      # https://evo.seudominio.com
+    evo_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)       # header apikey
+    evo_instance: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    evo_state: Mapped[str | None] = mapped_column(String(32), nullable=True)   # open | connecting | close
+    evo_owner_jid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # segredo na URL do webhook: e o que prova que o POST veio da SUA Evolution.
+    webhook_token: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+
     # cache do ultimo /status — evita bater na Graph API so pra desenhar a lista
     display_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     verified_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -92,6 +110,23 @@ class Contact(Base):
     utm: Mapped[dict] = mapped_column(JSON, default=dict)
     first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone_number_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # --- CRM da linha ---
+    # A conversa e o registro do CRM: nao ha uma segunda tabela de "card". Etapa,
+    # nota e o resumo da ultima mensagem moram aqui porque a lista do CRM precisa
+    # deles em uma consulta so — juntar `messages` a cada linha da tela nao escala.
+    stage: Mapped[str] = mapped_column(String(16), default="novo", index=True)
+    stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # webhook = falou com a gente depois de conectar; sync = veio do historico da
+    # instancia; simulado = criado pelo simulador da tela.
+    origin: Mapped[str] = mapped_column(String(16), default="webhook")
+    profile_pic_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    last_message_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_message_from_me: Mapped[bool] = mapped_column(Boolean, default=False)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # por qual linha esse lead entrou. O mesmo wa_id falando com dois numeros
     # gera dois contatos — cada um com a atribuicao da sua campanha.
     wa_number_id: Mapped[int | None] = mapped_column(
@@ -107,6 +142,10 @@ class Contact(Base):
     @property
     def has_attribution(self) -> bool:
         return bool(self.ctwa_clid or self.gclid or self.wbraid or self.gbraid)
+
+
+# Etapas do CRM de conversa. A ordem aqui e a ordem das colunas do kanban.
+CONTACT_STAGES = ("novo", "atendendo", "qualificado", "ganho", "perdido")
 
 
 class Message(Base):
@@ -137,6 +176,10 @@ class Conversion(Base):
     currency: Mapped[str] = mapped_column(String(8), default="BRL")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
+    # manual = botao na tela de Leads; rule = palavra-chave do atendente;
+    # auto = primeiro contato com atribuicao.
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    rule_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     contact: Mapped["Contact"] = relationship(back_populates="conversions")
@@ -176,6 +219,52 @@ class WebhookLog(Base):
         ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KeywordRule(Base):
+    """Regra que dispara um evento de conversao quando uma palavra-chave aparece.
+
+    O caso principal e o do atendente: quando ELE responde no chat com o termo
+    combinado ("Agradecemos a confianca", "Seu horario esta confirmado"), a
+    conversa virou lead/venda de verdade — e e esse o momento de mandar o evento
+    pro Meta, nao a hora em que a pessoa so disse "oi".
+
+    `direction` escolhe quem precisa ter mandado a mensagem:
+      attendant -> mensagem que SAIU do numero (fromMe=true na Evolution)
+      customer  -> mensagem que o cliente mandou
+      any       -> qualquer uma das duas
+
+    `wa_number_id` nulo faz a regra valer para todas as linhas.
+    """
+
+    __tablename__ = "keyword_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+
+    event_name: Mapped[str] = mapped_column(String(64), default="Lead")
+    keyword: Mapped[str] = mapped_column(String(240))
+    match_mode: Mapped[str] = mapped_column(String(8), default="broad")     # broad | exact
+    direction: Mapped[str] = mapped_column(String(16), default="attendant")  # attendant | customer | any
+
+    value_mode: Mapped[str] = mapped_column(String(8), default="none")      # none | fixed | extract
+    value_fixed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="BRL")
+
+    # Sem ctwa_clid o Meta nao liga o evento a nenhuma campanha. Ligado por padrao
+    # pra nao encher o Events Manager de evento que nao atribui nada.
+    require_attribution: Mapped[bool] = mapped_column(Boolean, default=True)
+    once_per_contact: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # ---------------------------------------------------------------------------

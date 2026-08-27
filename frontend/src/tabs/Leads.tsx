@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
 
 import { useNumber } from '../numberContext'
-import { api, DESTINATION_LABEL, type Contact, type ContactDetail, type Conversion } from '../api'
+import { api, evolutionApi, type Contact, type ContactDetail, type Conversion } from '../api'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Toggle, when } from '../ui'
-
-const DESTINATIONS = ['meta_capi', 'google_ads', 'webhook'] as const
 
 function AttributionTags({ c }: { c: Contact }) {
   return (
@@ -22,7 +20,6 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
   const [eventName, setEventName] = useState('Lead')
   const [value, setValue] = useState('')
   const [isTest, setIsTest] = useState(true)
-  const [dests, setDests] = useState<string[]>(['meta_capi'])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null)
@@ -32,7 +29,7 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
     event_name: eventName,
     value: value === '' ? null : Number(value),
     is_test: isTest,
-    destinations: dests,
+    destinations: ['meta_capi'],
   })
 
   const act = async (fn: () => Promise<void>) => {
@@ -58,28 +55,10 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
         </Field>
       </div>
 
-      <div>
-        <span className="mb-2 block text-xs font-medium text-ink-300">Destinos</span>
-        <div className="flex flex-wrap gap-2">
-          {DESTINATIONS.map((d) => {
-            const on = dests.includes(d)
-            return (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDests(on ? dests.filter((x) => x !== d) : [...dests, d])}
-                className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                  on
-                    ? 'border-wa-500 bg-wa-900/50 text-wa-500'
-                    : 'border-ink-700 bg-ink-850 text-ink-300 hover:border-ink-500'
-                }`}
-              >
-                {DESTINATION_LABEL[d]}
-              </button>
-            )
-          })}
-        </div>
-      </div>
+      <p className="text-[11px] leading-snug text-ink-500">
+        Destino: <strong className="text-ink-300">Meta Conversions API</strong>, com o Pixel e o token da linha
+        (aba Rastreamento). Google Ads e webhook próprio continuam disponíveis na área de admin.
+      </p>
 
       <Toggle
         checked={isTest}
@@ -92,7 +71,7 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
       <div className="flex gap-2">
         <Button
           variant="primary"
-          disabled={busy || dests.length === 0}
+          disabled={busy}
           onClick={() => act(async () => onFired(await api.fire(payload())))}
         >
           {busy ? 'enviando…' : 'Disparar conversão'}
@@ -113,7 +92,7 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
 }
 
 export default function Leads({ onChanged }: { onChanged: () => void }) {
-  const { numberId, current, labelOf } = useNumber()
+  const { numberId, current } = useNumber()
   const [contacts, setContacts] = useState<Contact[]>([])
   const [onlyAttributed, setOnlyAttributed] = useState(false)
   const [selected, setSelected] = useState<ContactDetail | null>(null)
@@ -160,8 +139,9 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
         {simOpen && (
           <div className="mb-4 space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">
             <p className="text-xs leading-relaxed text-ink-500">
-              Injeta um payload idêntico ao da Meta, com <code className="font-mono">referral.ctwa_clid</code>.
-              Serve para validar o fluxo inteiro sem precisar de anúncio no ar. O lead entra em{' '}
+              Injeta um payload idêntico ao da Evolution API, com{' '}
+              <code className="font-mono">contextInfo.externalAdReply.ctwaClid</code>. Valida o fluxo inteiro sem
+              precisar de anúncio no ar. O lead entra em{' '}
               <strong className="text-ink-100">{current?.label ?? 'linha padrão'}</strong>.
             </p>
             <div className="grid grid-cols-2 gap-3">
@@ -184,8 +164,10 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
             <Button
               variant="primary"
               size="sm"
+              disabled={numberId === undefined}
               onClick={async () => {
-                await api.simulate(sim, numberId)
+                if (numberId === undefined) return
+                await evolutionApi.simulate(numberId, sim)
                 setFlash('Lead simulado criado.')
                 setTimeout(() => setFlash(null), 2000)
                 await load()
@@ -249,12 +231,25 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
               <Empty>Sem mensagens.</Empty>
             ) : (
               <ul className="space-y-2">
-                {selected.messages.map((m) => (
-                  <li key={m.id} className="rounded-lg border border-ink-800 bg-ink-850 px-3 py-2">
-                    <p className="text-sm text-ink-100">{m.body ?? `[${m.type}]`}</p>
-                    <p className="mt-1 font-mono text-[11px] text-ink-500">{when(m.sent_at)}</p>
-                  </li>
-                ))}
+                {selected.messages.map((m) => {
+                  const outbound = m.direction === 'out'
+                  return (
+                    <li
+                      key={m.id}
+                      className={`rounded-lg border px-3 py-2 ${
+                        outbound
+                          ? 'ml-8 border-wa-500/25 bg-wa-900/20'
+                          : 'mr-8 border-ink-800 bg-ink-850'
+                      }`}
+                    >
+                      <p className="text-sm text-ink-100">{m.body ?? `[${m.type}]`}</p>
+                      <p className="mt-1 flex items-center gap-2 font-mono text-[11px] text-ink-500">
+                        <span>{outbound ? 'atendente' : 'cliente'}</span>
+                        <span>{when(m.sent_at)}</span>
+                      </p>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </Card>

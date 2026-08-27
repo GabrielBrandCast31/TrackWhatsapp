@@ -49,6 +49,7 @@ def serialize_number(n: WaNumber, cfg: dict | None = None, counts: dict | None =
     out = {
         "id": n.id,
         "label": n.label,
+        "channel": n.channel,
         "phone_number_id": n.phone_number_id,
         "business_account_id": n.business_account_id,
         "verify_token": n.verify_token,
@@ -147,10 +148,12 @@ async def _counts(session: AsyncSession, number_id: int) -> dict:
 
 @router.get("")
 async def list_numbers(
-    with_counts: bool = Query(default=True), session: AsyncSession = Depends(get_session)
+    with_counts: bool = Query(default=True),
+    channel: str | None = Query(default=None, description='"cloud" ou "evolution"; vazio = todas'),
+    session: AsyncSession = Depends(get_session),
 ):
     global_cfg = await settings_store.load(session)
-    rows = await numbers_service.list_numbers(session)
+    rows = await numbers_service.list_numbers(session, channel=channel)
     return [
         serialize_number(
             n,
@@ -174,6 +177,7 @@ async def create_number(payload: NumberIn, session: AsyncSession = Depends(get_s
 
     number = WaNumber(
         label=payload.label.strip() or phone_number_id,
+        channel="cloud",  # esta tela e o cadastro da Cloud API
         phone_number_id=phone_number_id,
         business_account_id=(payload.business_account_id or "").strip() or None,
         access_token=payload.access_token or None,

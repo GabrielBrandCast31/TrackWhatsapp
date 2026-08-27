@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
-import { numbersApi, type WaNumber } from './api'
+import { evolutionApi, type EvoInstance } from './api'
 
-/** Linha de WhatsApp selecionada.
+/** Linha de WhatsApp selecionada — uma instância da Evolution API.
  *
  * `undefined` = "Todas as linhas": as telas mostram a base inteira e o backend
  * nao filtra nada. Qualquer acao de ESCRITA que precise de uma linha (disparar
@@ -17,8 +17,8 @@ const STORAGE_KEY = 'wa.selectedNumber'
 type NumberContextValue = {
   numberId: number | undefined
   setNumberId: (id: number | undefined) => void
-  numbers: WaNumber[]
-  current: WaNumber | undefined
+  numbers: EvoInstance[]
+  current: EvoInstance | undefined
   loading: boolean
   reload: () => Promise<void>
   labelOf: (id: number | null | undefined) => string
@@ -36,7 +36,7 @@ function readStored(): number | undefined {
 }
 
 export function NumberProvider({ children }: { children: ReactNode }) {
-  const [numbers, setNumbers] = useState<WaNumber[]>([])
+  const [numbers, setNumbers] = useState<EvoInstance[]>([])
   const [numberId, setId] = useState<number | undefined>(readStored)
   const [loading, setLoading] = useState(true)
 
@@ -53,7 +53,7 @@ export function NumberProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const rows = await numbersApi.list()
+      const rows = await evolutionApi.list()
       setNumbers(rows)
       setId((prev) => {
         // linha apagada ou nunca escolhida: cai na padrao, nao numa base alheia
@@ -110,3 +110,6 @@ export function requireId(numberId: number | undefined): number | null {
 
 export const NO_NUMBER_MESSAGE =
   'Escolha uma linha de WhatsApp no topo da tela — essa ação precisa saber por qual número ela vale.'
+
+export const NO_INSTANCE_MESSAGE =
+  'Nenhuma instância cadastrada. Comece na aba Conexão: informe a URL da sua Evolution API, a apikey e o nome da instância.'

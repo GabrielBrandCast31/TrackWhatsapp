@@ -7,7 +7,6 @@ import {
   type Orphans,
   type WaNumber,
 } from '../api'
-import { useNumber } from '../numberContext'
 import { Badge, Banner, Button, Card, Copy, Empty, Field, Input, Textarea, when } from '../ui'
 
 /** Credenciais da Cloud API: identidade da linha, uma por número. */
@@ -462,20 +461,22 @@ function NumberRow({
 }
 
 export default function Numbers({ onChanged }: { onChanged: () => void }) {
-  const { numbers, numberId, setNumberId, reload } = useNumber()
+  // esta tela e da Cloud API: tem lista propria, e nao a do seletor da Evolution
+  const [numbers, setNumbers] = useState<WaNumber[]>([])
+  const [selectedId, setSelectedId] = useState<number | undefined>(undefined)
   const [editing, setEditing] = useState<WaNumber | null | undefined>(undefined)
   const [orphans, setOrphans] = useState<Orphans | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
 
   const refresh = async () => {
-    await reload()
+    setNumbers(await numbersApi.list('cloud').catch(() => []))
     setOrphans(await numbersApi.orphans().catch(() => null))
     onChanged()
   }
 
   useEffect(() => {
-    void numbersApi.orphans().then(setOrphans).catch(() => setOrphans(null))
-  }, [numbers.length])
+    void refresh()
+  }, [])
 
   return (
     <div className="space-y-5">
@@ -510,8 +511,8 @@ export default function Numbers({ onChanged }: { onChanged: () => void }) {
               <NumberRow
                 key={n.id}
                 n={n}
-                selected={n.id === numberId}
-                onSelect={() => setNumberId(n.id)}
+                selected={n.id === selectedId}
+                onSelect={() => setSelectedId(n.id)}
                 onEdit={() => setEditing(n)}
                 onChanged={() => void refresh()}
               />

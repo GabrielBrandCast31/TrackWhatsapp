@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { api, type ConfigResponse } from '../api'
-import { useNumber } from '../numberContext'
+import { api, numbersApi, type ConfigResponse, type WaNumber } from '../api'
 import { Badge, Banner, Button, Card, Copy, Field, Input } from '../ui'
 
 const SECTIONS = [
@@ -134,12 +133,18 @@ function Group({ title, items, onGo }: { title: string; items: Item[]; onGo?: ()
 /* ---------- a aba ---------- */
 
 export default function Manual({ onNavigate }: { onNavigate: (tab: string) => void }) {
-  const { current } = useNumber()
   const [cfg, setCfg] = useState<ConfigResponse | null>(null)
+  // o checklist abaixo e da Cloud API: olha a linha Cloud padrao, nao a instancia
+  // da Evolution selecionada na tela principal.
+  const [current, setCurrent] = useState<WaNumber | undefined>(undefined)
   const [phone, setPhone] = useState('5511999998888')
 
   useEffect(() => {
     void api.getConfig().then(setCfg).catch(() => setCfg(null))
+    void numbersApi
+      .list('cloud')
+      .then((rows) => setCurrent(rows.find((n) => n.is_default) ?? rows[0]))
+      .catch(() => setCurrent(undefined))
   }, [])
 
   const val = (k: string) => String(cfg?.config[k] ?? '')
@@ -163,8 +168,8 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
       label: 'Linha selecionada',
       ok: Boolean(current),
       why: current
-        ? `Você está configurando "${current.label}". Troque a linha no topo da tela.`
-        : 'Cadastre um número na aba Números e selecione-o no topo da tela.',
+        ? `Checklist da linha Cloud API "${current.label}".`
+        : 'Nenhuma linha da Cloud API cadastrada — este checklist é do canal legado (aba Cloud API).',
     },
     {
       label: 'Access Token',

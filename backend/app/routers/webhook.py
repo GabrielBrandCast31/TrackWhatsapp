@@ -1,4 +1,16 @@
-"""Webhook da WhatsApp Cloud API.
+"""Webhooks de entrada — Evolution API (canal padrao) e Cloud API (legado).
+
+Evolution API:
+
+POST /webhook/evolution/{numero}/{token} -> URL de uma instancia (o que a tela mostra)
+POST /webhook/evolution                  -> URL unica, roteada pelo campo `instance`
+
+O token na URL e o que autentica: e um segredo por linha, gerado no cadastro, e
+sem ele o POST e recusado. Na URL unica a autenticacao e a `apikey` que a propria
+Evolution manda no corpo/cabecalho — comparada com a da linha de destino. Nos dois
+casos, um POST de fora nao consegue inventar lead nem atribuicao na base.
+
+Cloud API (agora so na area de admin):
 
 GET  /webhook/whatsapp        -> handshake de verificacao da Meta (hub.challenge)
 POST /webhook/whatsapp        -> recebimento das mensagens de QUALQUER numero
@@ -20,12 +32,14 @@ mesmo payload quebrado nao ajuda ninguem.
 
 import json
 import logging
+from hmac import compare_digest
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import numbers, settings_store
 from app.db import get_session
+from app.evolution_ingest import ingest_event, instance_name
 from app.ingest import ingest_payload, payload_phone_number_ids
 from app.models import WaNumber
 from app.services import whatsapp_cloud
@@ -186,3 +200,88 @@ async def receive_for_number(
     if number is None:
         return Response(content="numero nao encontrado", status_code=404, media_type="text/plain")
     return await _receive(session, request, x_hub_signature_256, number)
+
+
+# ---------------------------------------------------------------------------
+# Evolution API
+# ---------------------------------------------------------------------------
+
+
+async def _receive_evolution(session: AsyncSession, payload: dict, number: WaNumber) -> dict:
+    """Processa o evento. Erro de processamento nao vira 500: a Evolution
+    reentregaria o mesmo payload quebrado em loop, e o log ja diz o que houve."""
+    try:
+        result = await ingest_event(session, payload, number)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("falha ao processar webhook da Evolution")
+        await session.rollback()
+        return {"received": True, "error": str(exc)}
+    return {"received": True, **result}
+
+
+def _payload_apikey(payload: dict, header: str | None) -> str:
+    return str(payload.get("apikey") or payload.get("apiKey") or header or "")
+
+
+def _same(sent: str, expected: str) -> bool:
+    """Comparacao em tempo constante. Em bytes: compare_digest recusa str fora do ASCII."""
+    return compare_digest(sent.encode("utf-8", "ignore"), expected.encode("utf-8", "ignore"))
+
+
+@router.post("/evolution/{number_id}/{token}")
+@router.post("/evolution/{number_id}/{token}/{event_path:path}")
+async def receive_evolution(
+    number_id: int,
+    token: str,
+    request: Request,
+    event_path: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    """URL de uma instancia. `event_path` existe porque a Evolution, quando
+    configurada com `byEvents`, acrescenta o nome do evento no fim da URL."""
+    number = await session.get(WaNumber, number_id)
+    if number is None or number.channel != "evolution":
+        return Response(status_code=404, content="instancia nao encontrada")
+
+    expected = number.webhook_token or ""
+    if not expected or not _same(token, expected):
+        log.warning("webhook da Evolution com token invalido para a linha %s", number_id)
+        return Response(status_code=401, content="token invalido")
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return {"received": True, "ignored": "corpo invalido"}
+    if not isinstance(payload, dict):
+        return {"received": True, "ignored": "corpo nao e objeto"}
+
+    return await _receive_evolution(session, payload, number)
+
+
+@router.post("/evolution")
+async def receive_evolution_shared(
+    request: Request,
+    apikey: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+):
+    """URL unica pra varias instancias: a linha sai do campo `instance` do payload
+    e a autenticacao e a `apikey` da propria Evolution."""
+    try:
+        payload = await request.json()
+    except ValueError:
+        return {"received": True, "ignored": "corpo invalido"}
+    if not isinstance(payload, dict):
+        return {"received": True, "ignored": "corpo nao e objeto"}
+
+    instance = instance_name(payload)
+    number = await numbers.by_evo_instance(session, instance)
+    if number is None:
+        log.warning("webhook da Evolution para instancia nao cadastrada: %s", instance)
+        return {"received": True, "ignored": f"instancia {instance or 'sem nome'} nao cadastrada"}
+
+    sent = _payload_apikey(payload, apikey)
+    if not number.evo_api_key or not _same(sent, number.evo_api_key):
+        log.warning("webhook da Evolution com apikey invalida para a instancia %s", instance)
+        return Response(status_code=401, content="apikey invalida")
+
+    return await _receive_evolution(session, payload, number)

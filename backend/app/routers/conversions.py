@@ -5,8 +5,6 @@ tiver pixel/dataset ou conta do Google proprios, o evento vai pra la; se nao
 tiver, cai nos destinos globais. Quem resolve isso e `_cfg_for_contact`.
 """
 
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
@@ -16,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
+from app.firing import fire_event
 from app.models import Contact, Conversion, WaNumber
 from app.services.dispatch import ALL_DESTINATIONS, dispatch_conversion, enabled_destinations
 
@@ -45,6 +44,8 @@ def serialize_conversion(c: Conversion, contact: Contact | None = None) -> dict:
         "currency": c.currency,
         "note": c.note,
         "is_test": c.is_test,
+        "source": c.source,
+        "rule_id": c.rule_id,
         "created_at": c.created_at,
         "dispatches": [serialize_dispatch(d) for d in (c.dispatches or [])],
     }
@@ -112,20 +113,18 @@ async def create_conversion(payload: ConversionIn, session: AsyncSession = Depen
             "nos destinos do próprio número — ou escolha na hora do disparo.",
         )
 
-    conv = Conversion(
-        contact_id=contact.id,
+    conv = await fire_event(
+        session,
+        cfg,
+        contact,
         event_name=payload.event_name or cfg.get("default_event_name") or "Lead",
-        event_id=f"wa-{contact.id}-{uuid.uuid4().hex[:12]}",
         value=payload.value,
-        currency=payload.currency or cfg.get("default_currency") or "BRL",
-        note=payload.note,
+        currency=payload.currency,
         is_test=payload.is_test,
+        note=payload.note,
+        source="manual",
+        destinations=targets,
     )
-    session.add(conv)
-    await session.commit()
-    await session.refresh(conv)
-
-    await dispatch_conversion(session, cfg, conv, contact, targets)
 
     refreshed = (
         await session.execute(

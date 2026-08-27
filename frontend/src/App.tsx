@@ -2,24 +2,20 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { api, type Stats } from './api'
 import { NumberProvider, useNumber } from './numberContext'
-import Connection from './tabs/Connection'
-import Numbers from './tabs/Numbers'
+import Admin from './tabs/Admin'
 import Conversions from './tabs/Conversions'
-import Crm from './tabs/Crm'
-import Destinations from './tabs/Destinations'
+import CrmNumber from './tabs/CrmNumber'
+import Instances from './tabs/Instances'
 import Leads from './tabs/Leads'
-import Manual from './tabs/Manual'
-import Prospecting from './tabs/Prospecting'
+import Tracking from './tabs/Tracking'
 
 const TABS = [
-  { id: 'numbers', label: 'Números' },
-  { id: 'connection', label: 'Conexão' },
-  { id: 'prospecting', label: 'Prospecção' },
+  { id: 'instances', label: 'Conexão' },
+  { id: 'tracking', label: 'Rastreamento' },
   { id: 'crm', label: 'CRM' },
   { id: 'leads', label: 'Leads' },
   { id: 'conversions', label: 'Conversões' },
-  { id: 'destinations', label: 'Destinos' },
-  { id: 'manual', label: 'Manual' },
+  { id: 'admin', label: 'Admin' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -41,7 +37,7 @@ function NumberPicker() {
 
   if (loading) return <span className="text-xs text-ink-500">carregando linhas…</span>
   if (numbers.length === 0) {
-    return <span className="text-xs text-amber-300">nenhuma linha cadastrada — comece em Números</span>
+    return <span className="text-xs text-amber-300">nenhuma linha cadastrada — comece em Conexão</span>
   }
 
   return (
@@ -61,14 +57,19 @@ function NumberPicker() {
         ))}
         <option value="all">Todas as linhas</option>
       </select>
-      {current && !current.active && <span className="text-[11px] text-amber-300">linha inativa</span>}
+      {current && ['open', 'connected'].includes(current.state ?? '') && (
+        <span className="text-[11px] text-wa-500">conectada</span>
+      )}
+      {current && current.state && !['open', 'connected'].includes(current.state) && (
+        <span className="text-[11px] text-amber-300">{current.state}</span>
+      )}
       {!current && <span className="text-[11px] text-ink-500">visão consolidada</span>}
     </div>
   )
 }
 
 function Shell() {
-  const [tab, setTab] = useState<TabId>('numbers')
+  const [tab, setTab] = useState<TabId>('instances')
   const [stats, setStats] = useState<Stats | null>(null)
   const { numberId } = useNumber()
 
@@ -87,10 +88,10 @@ function Shell() {
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-end justify-between gap-6 px-6 py-5">
           <div>
             <h1 className="text-lg font-semibold tracking-tight">
-              WhatsApp <span className="text-wa-500">CRM & Conversion Tracker</span>
+              WhatsApp <span className="text-wa-500">Conversion Tracker</span>
             </h1>
             <p className="mt-0.5 text-xs text-ink-500">
-              Varredura por raio → abordagem ativa → resposta no WhatsApp → conversão na campanha
+              Evolution API → ctwa_clid do anúncio → palavra-chave do atendente → conversão no Meta
             </p>
             <div className="mt-3">
               <NumberPicker />
@@ -98,12 +99,11 @@ function Shell() {
           </div>
           {stats && (
             <div className="flex flex-wrap gap-7">
-              <Stat label="Prospects" value={stats.prospects} />
-              <Stat label="Abordados" value={stats.outreach_sent} />
-              <Stat label="Responderam" value={stats.prospects_replied} accent />
               <Stat label="Leads" value={stats.contacts} />
               <Stat label="Com atribuição" value={stats.attributed_contacts} accent />
               <Stat label="Conversões" value={stats.conversions} />
+              <Stat label="Por palavra-chave" value={stats.rule_conversions ?? 0} accent />
+              <Stat label="Regras" value={stats.rules ?? 0} />
               <Stat label="Falhas" value={stats.dispatches.error ?? 0} />
             </div>
           )}
@@ -117,7 +117,7 @@ function Shell() {
                 tab === t.id
                   ? 'border-wa-500 text-ink-100'
                   : 'border-transparent text-ink-500 hover:text-ink-300'
-              }`}
+              } ${t.id === 'admin' ? 'ml-auto' : ''}`}
             >
               {t.label}
             </button>
@@ -126,14 +126,12 @@ function Shell() {
       </header>
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
-        {tab === 'numbers' && <Numbers onChanged={refresh} />}
-        {tab === 'connection' && <Connection onChanged={refresh} />}
-        {tab === 'prospecting' && <Prospecting onChanged={refresh} />}
-        {tab === 'crm' && <Crm onChanged={refresh} />}
+        {tab === 'instances' && <Instances onChanged={refresh} />}
+        {tab === 'tracking' && <Tracking onChanged={refresh} />}
+        {tab === 'crm' && <CrmNumber onChanged={refresh} />}
         {tab === 'leads' && <Leads onChanged={refresh} />}
         {tab === 'conversions' && <Conversions onChanged={refresh} />}
-        {tab === 'destinations' && <Destinations onChanged={refresh} />}
-        {tab === 'manual' && <Manual onNavigate={(t) => setTab(t as TabId)} />}
+        {tab === 'admin' && <Admin onChanged={refresh} />}
       </main>
     </div>
   )

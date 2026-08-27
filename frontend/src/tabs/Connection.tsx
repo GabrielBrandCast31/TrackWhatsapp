@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
 
-import { api, numbersApi, type ConfigResponse, type ConnectionStatus } from '../api'
-import { useNumber } from '../numberContext'
-import { Badge, Banner, Button, Card, Copy, Empty, Input, Json, when } from '../ui'
+import { api, numbersApi, type ConfigResponse, type ConnectionStatus, type WaNumber } from '../api'
+import { Badge, Banner, Button, Card, Copy, Empty, Input, Json, Select, when } from '../ui'
 
-/** Diagnostico da linha selecionada.
+/** Diagnostico de uma linha da CLOUD API (canal legado).
  *
- * As credenciais de cada numero vivem na aba Números — aqui e onde voce confere
- * se a linha esta de pe: webhook certo, número respondendo, mensagens chegando.
+ * Tem seletor proprio: o do topo da tela escolhe instancia da Evolution, e as
+ * acoes daqui falam com a Graph API — misturar os dois daria erro sem sentido.
  */
 export default function Connection({ onChanged }: { onChanged: () => void }) {
-  const { numberId, current, numbers, labelOf } = useNumber()
+  const [numbers, setNumbers] = useState<WaNumber[]>([])
+  const [numberId, setNumberId] = useState<number | undefined>(undefined)
+  const current = numbers.find((n) => n.id === numberId)
+  const labelOf = (id: number | null | undefined) =>
+    id === null || id === undefined ? 'Sem número' : numbers.find((n) => n.id === id)?.label ?? `#${id}`
   const [cfg, setCfg] = useState<ConfigResponse | null>(null)
   const [status, setStatus] = useState<ConnectionStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -31,6 +34,13 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => {
     void api.getConfig().then(setCfg)
+    void numbersApi
+      .list('cloud')
+      .then((rows) => {
+        setNumbers(rows)
+        setNumberId(rows.find((n) => n.is_default)?.id ?? rows[0]?.id)
+      })
+      .catch(() => setNumbers([]))
   }, [])
 
   useEffect(() => {
@@ -68,10 +78,11 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
 
   if (numbers.length === 0) {
     return (
-      <Card title="Nenhuma linha cadastrada">
+      <Card title="Nenhuma linha da Cloud API cadastrada">
         <Empty>
-          Vá em <strong className="text-ink-100">Números</strong> e cadastre o primeiro número de
-          WhatsApp. Sem isso, não há webhook para configurar na Meta.
+          Este diagnóstico é do canal legado. Cadastre um número na aba{' '}
+          <strong className="text-ink-100">Cloud API</strong>, ou use a aba{' '}
+          <strong className="text-ink-100">Conexão</strong> da tela principal para a Evolution.
         </Empty>
       </Card>
     )
@@ -80,6 +91,21 @@ export default function Connection({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
       <div className="space-y-5">
+        <Card title="Linha da Cloud API" subtitle="Qual número deste canal você está diagnosticando.">
+          <Select
+            value={numberId ?? ''}
+            onChange={(e) => setNumberId(e.target.value === '' ? undefined : Number(e.target.value))}
+          >
+            {numbers.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.label}
+                {n.display_phone_number ? ` · ${n.display_phone_number}` : ''}
+              </option>
+            ))}
+            <option value="">Todas as linhas</option>
+          </Select>
+        </Card>
+
         <Card
           title="Webhook"
           subtitle="Cole a URL em Meta for Developers > WhatsApp > Configuration > Webhook e assine o campo messages."

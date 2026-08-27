@@ -13,12 +13,48 @@ log = logging.getLogger(__name__)
 
 # tabela -> coluna -> tipo SQL (compativel com SQLite e Postgres)
 _COLUMNS: dict[str, dict[str, str]] = {
-    "contacts": {"wa_number_id": "INTEGER"},
+    "contacts": {
+        "wa_number_id": "INTEGER",
+        # CRM por linha
+        "stage": "VARCHAR(16)",
+        "stage_changed_at": "TIMESTAMP",
+        "note": "TEXT",
+        "origin": "VARCHAR(16)",
+        "profile_pic_url": "TEXT",
+        "last_message_at": "TIMESTAMP",
+        "last_message_body": "TEXT",
+        "last_message_from_me": "BOOLEAN",
+        "unread_count": "INTEGER",
+        "synced_at": "TIMESTAMP",
+    },
     "prospects": {"wa_number_id": "INTEGER"},
     "prospect_searches": {"wa_number_id": "INTEGER"},
     "outreaches": {"wa_number_id": "INTEGER"},
     "webhook_logs": {"wa_number_id": "INTEGER", "phone_number_id": "VARCHAR(64)"},
+    # linha passou a ter canal: Evolution API (padrao) ou Cloud API (admin)
+    "wa_numbers": {
+        "channel": "VARCHAR(16)",
+        "evo_base_url": "TEXT",
+        "evo_api_key": "TEXT",
+        "evo_instance": "VARCHAR(120)",
+        "evo_state": "VARCHAR(32)",
+        "evo_owner_jid": "VARCHAR(64)",
+        "webhook_token": "VARCHAR(64)",
+    },
+    # de onde veio o evento: botao, regra de palavra-chave ou primeiro contato
+    "conversions": {"source": "VARCHAR(16)", "rule_id": "INTEGER"},
 }
+
+# coluna nova com valor obrigatorio: ALTER TABLE cria com NULL, e o backfill
+# deixa a base antiga coerente com o default do modelo.
+_BACKFILL: tuple[tuple[str, str, str], ...] = (
+    ("wa_numbers", "channel", "'cloud'"),   # linha que ja existia e Cloud API
+    ("conversions", "source", "'manual'"),
+    ("contacts", "stage", "'novo'"),
+    ("contacts", "origin", "'webhook'"),
+    ("contacts", "unread_count", "0"),
+    ("contacts", "last_message_from_me", "0"),
+)
 
 # indices unicos que deixaram de ser unicos ao virar multi-numero
 _DROP_INDEXES = ("ix_prospects_place_id",)
@@ -54,6 +90,22 @@ def _relax_unique_indexes(conn) -> None:
             log.info("migracao: indice %s deixou de ser unico", index["name"])
 
 
+def _backfill(conn) -> None:
+    inspector = inspect(conn)
+    tables = set(inspector.get_table_names())
+    for table, column, value in _BACKFILL:
+        if table not in tables:
+            continue
+        if column not in {c["name"] for c in inspector.get_columns(table)}:
+            continue
+        result = conn.execute(
+            text(f"UPDATE {table} SET {column} = {value} WHERE {column} IS NULL")
+        )
+        if result.rowcount:
+            log.info("migracao: %s.%s preenchida em %s linha(s)", table, column, result.rowcount)
+
+
 def upgrade(conn) -> None:
     _add_missing_columns(conn)
     _relax_unique_indexes(conn)
+    _backfill(conn)

@@ -1,38 +1,39 @@
-# WhatsApp CRM & Conversion Tracker
+# WhatsApp Conversion Tracker — Evolution API
 
-Plataforma para gerir **vários números de WhatsApp** (Cloud API oficial) num mesmo
-sistema, cada um com dois fluxos que se encontram no mesmo funil:
+Rastreia conversa de WhatsApp vinda de anúncio **Click to WhatsApp** e devolve o evento
+de conversão para a campanha, com o valor certo, no momento certo.
 
-- **Passivo** — captura leads vindos de anúncios **Click to WhatsApp** com o
-  identificador de clique e dispara o evento de conversão de volta para a campanha.
-- **Ativo** — varre potenciais clientes no Google Maps dentro de um raio (via Apify),
-  monta um CRM com os telefones e dispara a abordagem pelo WhatsApp. Quem responde
-  vira lead e entra no mesmo fluxo de conversão.
-
-Destinos de conversão suportados: **Meta Conversions API**, **Google Ads (conversões
-offline)** e **webhook genérico** (n8n / Make / GTM server-side).
-
-Cada número é uma **linha isolada**: credenciais próprias, base de leads e prospects
-própria, e destinos de conversão próprios. Um seletor no topo do painel define qual
-linha você está olhando; *Todas as linhas* dá a visão consolidada.
-
-## Como o rastreio funciona
+O canal é a **Evolution API**. É ela que entrega a mensagem crua do WhatsApp — e é na
+mensagem crua que vem o `ctwaClid`, o identificador que amarra a conversa ao anúncio.
+Sem ele o Meta não tem como atribuir nada.
 
 ```
-anúncio CTWA  ──clique──▶  WhatsApp  ──webhook──▶  esta plataforma  ──evento──▶  Meta / Google
-                                        │                                │
-                          referral.ctwa_clid                  action_source=business_messaging
-                                                              user_data.ctwa_clid
+anúncio CTWA ──clique──▶ WhatsApp ──Evolution API──▶ esta plataforma ──evento──▶ Meta
+                                          │                              │
+                       contextInfo.externalAdReply.ctwaClid    action_source=business_messaging
+                                                               user_data.ctwa_clid
 ```
 
-O `ctwa_clid` chega no objeto `referral` **só na primeira mensagem depois do clique**.
-É ele que amarra a conversa ao anúncio — por isso o webhook é gravado no ato e a
-atribuição nunca é sobrescrita nas mensagens seguintes.
+**O disparo é a palavra-chave do atendente.** A pessoa dizer "oi" não é conversão. O que
+vale é o atendente responder no chat com o termo que só aparece quando o atendimento
+aconteceu de verdade — "Agradecemos a confiança", "Seu horário está confirmado". Você
+cadastra esse termo, e o evento sai sozinho quando ele aparecer. Cada regra tem um
+**simulador**: cole a mensagem e veja, antes de valer no chat, se dispararia e com que
+valor.
 
-O Google Ads não injeta `gclid` no WhatsApp. O caminho suportado é a landing page
-montar o link `wa.me` com o clique embutido no texto pré-preenchido
-(`"Olá! gclid=Cj0KC..."`). O extrator lê `gclid`, `wbraid`, `gbraid` e UTMs tanto da
-`source_url` quanto do texto da mensagem.
+Cada linha é uma **instância da Evolution**, com Pixel, token e palavras-chave próprios.
+Um seletor no topo do painel define qual linha você está olhando.
+
+## A tela
+
+| Aba | O que faz |
+|---|---|
+| **Conexão** | cadastra a instância (URL, apikey, nome), pareia por QR e grava o webhook |
+| **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
+| **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
+| **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
+| **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |
+| **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API e destinos extras (login) |
 
 ## Subir
 
@@ -55,41 +56,9 @@ cd backend && python3.11 -m venv .venv && .venv/bin/pip install -r requirements.
 cd frontend && npm install && npm run dev
 ```
 
-## Vários números na mesma instalação
+## Conectar a Evolution API
 
-Aba **Números**: cada linha tem seu Phone Number ID, Access Token, WABA, verify token
-e app secret. A primeira linha cadastrada vira a **padrão** (é para ela que caem os
-webhooks de números ainda não cadastrados, e é ela que as ações usam quando você está
-em *Todas as linhas*).
-
-O que fica separado por linha:
-
-| Isolado por linha | Compartilhado |
-|---|---|
-| leads, mensagens e atribuição | token do Apify e idioma da varredura |
-| prospects, varreduras e CRM | destinos globais (herdados por quem não sobrescreve) |
-| abordagem ativa: template, cap diário e intervalo | — |
-| destinos de conversão, se a linha definir os seus | — |
-
-**Duas formas de montar o webhook na Meta**, e o painel mostra as duas URLs:
-
-- `…/webhook/whatsapp` — **URL única**, para vários números no mesmo app da Meta. A
-  mensagem é roteada pelo `phone_number_id` que vem no payload.
-- `…/webhook/whatsapp/{id}` — **URL exclusiva da linha**, para quando cada cliente tem
-  o próprio app. Valida o verify token e o app secret só daquela linha.
-
-**Destinos por linha**: em *Números → editar*, cada campo de destino em branco significa
-"herda o global" (aba **Destinos**). Preencha o Pixel/Dataset e o token da linha para
-mandar a conversão dela para a conta de anúncios do cliente certo.
-
-Removendo uma linha, você escolhe: manter a base (os leads e prospects ficam sem dono e
-só aparecem em *Todas as linhas*, e podem ser adotados por outra linha depois) ou apagar
-tudo junto. Quem já usava a versão de número único não perde nada: na primeira subida a
-configuração antiga vira a linha #1 e toda a base existente é vinculada a ela.
-
-## Configurar a conexão
-
-A Meta exige HTTPS público no webhook. Em dev:
+A Evolution precisa alcançar esta aplicação por HTTPS público. Em dev:
 
 ```bash
 ngrok http 8030          # o frontend faz proxy de /webhook e /api pro backend
@@ -97,157 +66,300 @@ ngrok http 8030          # o frontend faz proxy de /webhook e /api pro backend
 
 Ponha o host do ngrok em `PUBLIC_BASE_URL` no `.env` e reinicie o backend.
 
-Depois, na aba **Números** do painel, adicione a linha:
+Aba **Conexão** → *Adicionar linha*:
+
+| Campo | O que é |
+|---|---|
+| Nome da linha | como você reconhece o cliente no seletor do topo |
+| Instância | o nome exato da instância na sua Evolution (`/instance/fetchInstances`) |
+| URL da Evolution API | `https://evo.seudominio.com` |
+| apikey | o header `apikey` — a chave global ou a da instância |
+
+Depois, nos botões da linha:
+
+1. **Conectar (QR)** — se a instância ainda não estiver pareada.
+2. **Configurar webhook** — grava a URL desta linha na instância. **Sem isso nada é
+   rastreado.** Os eventos assinados são `MESSAGES_UPSERT`, `SEND_MESSAGE`,
+   `MESSAGES_UPDATE` e `CONNECTION_UPDATE`.
+3. **Verificar status** — confere o pareamento e se o webhook aponta pra cá.
+
+A URL do webhook termina com um **token secreto por linha**. É ele que autentica o POST:
+sem o token certo, a requisição é recusada com 401. Trate essa URL como senha; se ela
+vazar, edite a linha e gere outro token.
+
+Existe também uma URL única (`/webhook/evolution`), roteada pelo campo `instance` do
+payload e autenticada pela `apikey` que a própria Evolution manda no corpo. Serve para
+quem prefere apontar todas as instâncias para o mesmo endereço.
+
+## Pixel e token
+
+Aba **Rastreamento** → *Meta — Pixel e token da API*, por linha:
 
 | Campo | Onde achar |
 |---|---|
-| Access Token | Business Settings → Usuários do sistema → token com `whatsapp_business_messaging` |
-| Phone Number ID | Meta for Developers → WhatsApp → API Setup |
-| WABA ID | mesma tela do Phone Number ID |
-| Verify Token | você inventa; use o mesmo no painel da Meta |
-| App Secret | App → Settings → Basic |
+| Pixel / Dataset ID | Events Manager → sua fonte de dados → Configurações |
+| Token da API de Conversões | Events Manager → Configurações → Gerar token de acesso |
+| Test Event Code | Events Manager → Test Events (usado só nas regras marcadas como teste) |
 
-Para a prospecção, preencha também o **token do Apify** na aba *Prospecção → Conta Apify
-→ configurar* (Console do Apify → Settings → Integrations → API token). Se ele estiver no
-`.env` como `APIFY_TOKEN`, já vem preenchido.
-
-No painel da Meta (WhatsApp → Configuration → Webhook), cole a URL que a aba **Conexão**
-mostra (a única ou a exclusiva da linha), o mesmo Verify Token, e **assine o campo
-`messages`**. Volte no painel e clique em *Testar conexão* e *Assinar webhooks* — os dois
-botões agem sobre a linha selecionada no topo.
-
-## Testar sem gastar clique em anúncio
-
-Aba **Leads** → *Simular lead*. Isso injeta um payload idêntico ao da Meta, com
-`referral.ctwa_clid` preenchido, e o lead aparece na lista com a atribuição extraída.
-
-Em seguida, no detalhe do lead → *Disparar conversão*:
-
-- **Ver payload** monta o JSON dos três destinos sem enviar nada.
-- **Disparar conversão** envia de verdade e grava request + response de cada destino.
-- Com **modo teste** ligado, o Meta recebe o `test_event_code` — o evento aparece em
-  *Events Manager → Test Events* e não entra na otimização da campanha.
-
-A aba **Conversões** mostra o log completo, com retry por destino que falhou.
-
-## Prospecção ativa (varredura por raio)
-
-```
-endereço ──geocode──▶ lat/lng + raio ──Apify──▶ Google Maps ──▶ prospects no CRM
-                                                                      │
-                                                        abordagem no WhatsApp
-                                                                      │
-                                              resposta ──▶ Contato ──▶ conversão
-```
-
-Aba **Prospecção**. Digite um endereço (o geocoder é o Nominatim/OpenStreetMap, sem
-chave), escolha o raio e os termos de busca. A área vai para o actor
-`compass/crawler-google-places` como um GeoJSON:
-
-```json
-{ "type": "Point", "coordinates": [-46.651918, -23.5648865], "radiusKm": 2 }
-```
-
-O Google raciocina por *viewport*, não por raio exato — então o import recalcula a
-distância de cada lugar com haversine e descarta o que passou do raio (com 10% de
-folga na borda). A distância fica visível em cada prospect.
-
-O que o import faz com cada lugar:
-
-| Etapa | Detalhe |
-|---|---|
-| Normaliza o telefone | `+55 11 3229-1681` → `+551132291681`; sem DDI, assume Brasil pelo DDD |
-| Classifica | **celular** vs **fixo** — mandar mensagem para fixo queima cota e reputação |
-| Deduplica | por `place_id` e por telefone canônico, atravessando varreduras diferentes |
-| Descarta | fechado permanentemente, ou fora do raio pedido |
-
-**Custo.** O Apify cobra por lugar encontrado. A varredura de 8 lugares que validou
-esse fluxo custou US$ 0,04 — o crédito gratuito de US$ 5/mês dá algumas centenas de
-prospects. Use *Quantidade por termo* como trava de gasto: cada termo é uma varredura
-independente.
-
-### Abordagem ativa
-
-Aba **CRM**: filtre (só celular, por varredura, por etapa), selecione e dispare.
-
-O disparo entra numa **fila** com intervalo configurável entre envios e limite diário —
-50 disparos com 8s de intervalo levariam minutos, e a requisição HTTP estouraria. O
-worker roda em background e retoma sozinho se o backend reiniciar. Cada tentativa grava
-request e response crus, igual ao log de conversões.
-
-⚠️ **Mensagem fria só entrega por template aprovado.** Texto livre da Cloud API só
-funciona dentro da janela de 24h depois de a pessoa te escrever. Para lista fria, crie
-um template (categoria *Marketing* ou *Utility*) no Gerenciador do WhatsApp e espere a
-aprovação — a aba lista os templates do seu WABA e marca quais estão aprovados. Isso é
-regra da Meta, não limitação daqui.
-
-Nas variáveis do template (e no texto livre) você pode usar `{nome}`, `{categoria}` e
-`{cidade}` — cada envio é preenchido com os dados daquele prospect.
-
-Trava de segurança: `outreach_enabled` começa **desligado**. Nada é enviado até você
-ligar em *CRM → Abordagem ativa → configurar*.
-
-### Como a resposta fecha o ciclo
-
-Quando o prospect responde, o webhook da Meta chega e o `ingest` liga a mensagem ao
-registro do CRM: o prospect ganha `contact_id`, vira etapa **Respondeu**, e o contato
-aparece na aba Leads pronto para disparar conversão.
-
-O match não é por igualdade de string: no Brasil o `wa_id` que a Meta entrega costuma
-vir **sem o nono dígito** (`5511988887777` → `551188887777`) enquanto o Maps devolve
-**com**. `phones.match_key` gera uma chave canônica sem o nono dígito e é por ela que os
-dois lados se reconhecem.
-
-### Etapas do CRM
-
-`novo` → `contatado` → `respondeu` → `qualificado` → `ganho` / `perdido`
-
-`contatado` é automático no envio; `respondeu` é automático na resposta. O resto é
-manual, e mover à mão nunca é rebaixado pelo automático.
-
-## Configurar os destinos
-
-Aba **Destinos**.
-
-**Meta CAPI** — Dataset/Pixel ID e o token gerado em Events Manager → Configurações.
-O evento sai como:
+O evento sai assim:
 
 ```json
 {
   "event_name": "Lead",
   "action_source": "business_messaging",
   "messaging_channel": "whatsapp",
-  "user_data": { "ctwa_clid": "...", "ph": ["<sha256>"] }
+  "user_data": { "ctwa_clid": "...", "ph": ["<sha256 do telefone>"] },
+  "custom_data": { "value": 1250.0, "currency": "BRL" }
 }
 ```
 
-**Google Ads** — Customer ID, Conversion Action ID (tipo *Importar*), developer token
-e OAuth (client id/secret + refresh token). O upload usa `uploadClickConversions`.
+O `ctwa_clid` vai **em claro** (é assim que o Meta espera); telefone e e-mail vão em
+SHA-256.
 
-**Webhook** — URL de destino. Com secret preenchido, o corpo vai assinado em
-`X-Signature-256: sha256=<hmac>`.
+## Eventos por palavra-chave
+
+Aba **Rastreamento** → *Eventos de conversão por palavra-chave*. Cada regra tem:
+
+| Campo | O que faz |
+|---|---|
+| **Evento** | `Lead`, `Schedule`, `Purchase`… (os eventos padrão do Meta) |
+| **Palavra-chave** | o termo que precisa aparecer na mensagem |
+| **Ampla / Exata** | *Ampla*: todas as palavras aparecem, em qualquer ordem. *Exata*: a frase inteira aparece na mesma ordem. As duas ignoram acento, maiúscula e pontuação |
+| **Valor** | *Sem valor*, *Valor fixo*, ou *Extrair da mensagem* (lê o `R$ 1.250,00` que o atendente escreveu) |
+| **Quem escreve** | o atendente (padrão), o cliente, ou qualquer um dos dois |
+| **Só com `ctwa_clid`** | ligado por padrão: evento sem atribuição não serve pra campanha nenhuma |
+| **Um disparo por lead** | ligado por padrão: o atendente repetir a frase não vira duas conversões |
+| **Modo teste** | usa o Test Event Code — aparece em *Test Events* e não afeta a otimização |
+
+### O simulador
+
+Cole no campo *Simular mensagem enviada* o que o atendente escreveria. O veredito vem
+na hora: **dispararia** (com o valor que sairia) ou **não dispararia** (com o motivo).
+
+O simulador chama a **mesma função** que o webhook usa para decidir o disparo real — não
+existe uma segunda implementação "aproximada" no frontend. Se ele disse que dispara,
+dispara.
+
+Exemplos com a regra `Agradecemos a confiança`, modo *Exata*, valor *Extrair*:
+
+| Mensagem do atendente | Resultado |
+|---|---|
+| `Agradecemos a confiança! Ficou R$ 1.250,00` | dispara `Lead` com R$ 1.250,00 |
+| `agradecemos a confianca, ficou 250,00` | dispara `Lead` com R$ 250,00 |
+| `Agradecemos, de verdade, a confiança` | não dispara (no modo *Exata* a frase precisa ser contígua) |
+| `Obrigado pela confiança` | não dispara |
+
+Números que são hora ou data (`às 15:30`, `dia 12`) são ignorados na extração de valor.
+
+## CRM de cada número
+
+Aba **CRM**, sempre da linha selecionada no topo: as conversas de um cliente nunca
+aparecem na base de outro.
+
+O registro do CRM **é a própria conversa** — não há uma tabela de "card" paralela que
+pudesse divergir do que aconteceu no chat. Na mesma lista convivem:
+
+- quem chegou pelo anúncio (com `ctwa_clid`, marcado como **anúncio**);
+- quem mandou mensagem por conta própria depois de a instância ser conectada;
+- quem já estava na agenda do número, trazido pelo botão **Sincronizar** (marcado como
+  **da agenda**).
+
+### Sincronizar
+
+O botão puxa da instância, em duas chamadas, a agenda (`/chat/findContacts`) e as
+conversas (`/chat/findChats`) — e guarda a última mensagem de cada conversa, então o
+chat já abre com conteúdo. Grupo, status e newsletter são descartados.
+
+As duas chamadas são independentes: se a Evolution recusar as conversas (é o que
+acontece quando ela roda **sem banco**, `DATABASE_ENABLED=false`), a agenda sozinha já
+povoa o CRM e a tela avisa o que falhou.
+
+O histórico completo de uma conversa vem **sob demanda**, no botão *puxar histórico*
+dentro do chat (`/chat/findMessages`). Puxar isso para todo mundo de uma vez seria lento
+e quase todo descartado.
+
+⚠️ **Histórico importado não dispara regra de palavra-chave.** As regras marcam o momento
+em que o atendimento acontece; reprocessar meses de conversa antiga mandaria uma enxurrada
+de eventos falsos para o Meta.
+
+### As três visualizações
+
+Mesmos dados, mesmos endpoints — muda o que cada uma coloca na frente:
+
+| Visualização | Para quê |
+|---|---|
+| **Kanban** | mover a conversa entre `Novo` → `Atendendo` → `Qualificado` → `Ganho`/`Perdido` arrastando o card |
+| **Lista** | tabela com busca e filtros, com o detalhe ao lado — bom para varrer volume |
+| **Caixa de entrada** | conversas por última mensagem, thread ao lado — bom para atender |
+
+Em qualquer uma, clicar abre o mesmo painel: etapa, nota interna, conversa, caixa de
+resposta, a atribuição do anúncio e o disparo manual de conversão.
+
+A busca cobre nome, telefone, nota **e o texto das mensagens** da conversa.
+
+### Etapas
+
+`novo` → `atendendo` → `qualificado` → `ganho` / `perdido`
+
+`atendendo` é automático: quando o atendente responde uma conversa que está em `novo`,
+o card avança sozinho. Etapa movida à mão nunca é rebaixada pelo automático.
+
+### Responder pelo CRM
+
+A caixa de resposta manda a mensagem pela Evolution. A mensagem **não** é gravada no ato:
+a Evolution devolve o evento `SEND_MESSAGE` no webhook, e é por lá que ela entra — junto
+com a avaliação das regras de palavra-chave. Ou seja, responder pelo CRM com o termo
+configurado dispara o evento igual a responder pelo celular. Gravar dos dois lados
+duplicaria conversa e disparo.
+
+## Testar sem gastar clique em anúncio
+
+Aba **Leads** → *Simular lead*. Injeta um payload idêntico ao da Evolution, com
+`contextInfo.externalAdReply.ctwaClid` preenchido — o lead aparece na lista com a
+atribuição extraída, pronto para as regras valerem em cima dele.
+
+No detalhe do lead:
+
+- **Ver payload** monta o JSON sem enviar nada.
+- **Disparar conversão** envia de verdade e grava request + response.
+- **Modo teste** manda o `test_event_code`.
+
+A aba **Conversões** mostra o log completo, marcando o que veio de palavra-chave, e tem
+retry por destino que falhou.
+
+## Área de admin
+
+Aba **Admin** (usuário e senha em `ADMIN_USER` / `ADMIN_PASSWORD`, padrão
+`gabriel` / `gabriel123`). O que estava na tela principal e saiu de lá continua inteiro
+aqui dentro:
+
+- **Prospecção** — varredura de potenciais clientes no Google Maps por raio (Apify)
+- **CRM** — o funil dos prospects e a abordagem ativa no WhatsApp
+- **Cloud API** — o canal oficial da Meta, para quem já usava a versão anterior
+- **Destinos** — Google Ads (conversões offline) e webhook genérico
+- **Manual** — o passo a passo com checklist de configuração
+
+A proteção mora no `include_router` do backend: qualquer rota nova desses módulos já
+nasce exigindo o token de admin. A sessão é um HMAC assinado com validade (12h por
+padrão) e vale enquanto a aba do navegador estiver aberta.
+
+⚠️ **Antes de expor na internet, troque a senha.** O padrão `gabriel123` está aqui no
+README, ou seja, é público. Defina no `.env`:
+
+```bash
+ADMIN_PASSWORD=<uma senha sua>
+ADMIN_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+```
+
+`ADMIN_SECRET` é a chave que assina o token de sessão — nunca é derivada da senha. Em
+branco, ela é sorteada a cada subida do backend: seguro, mas a sessão cai no restart.
+Com a senha padrão em uso, o backend registra um `WARNING` no log a cada subida.
+
+### Prospecção ativa (varredura por raio)
+
+```
+endereço ──geocode──▶ lat/lng + raio ──Apify──▶ Google Maps ──▶ prospects no CRM
+                                                                      │
+                                                        abordagem no WhatsApp
+                                                                      │
+                                              resposta ──▶ Lead ──▶ conversão
+```
+
+Digite um endereço (o geocoder é o Nominatim/OpenStreetMap, sem chave), escolha o raio e
+os termos de busca. A área vai para o actor `compass/crawler-google-places` como um
+GeoJSON:
+
+```json
+{ "type": "Point", "coordinates": [-46.651918, -23.5648865], "radiusKm": 2 }
+```
+
+O Google raciocina por *viewport*, não por raio exato — então o import recalcula a
+distância de cada lugar com haversine e descarta o que passou do raio (com 10% de folga
+na borda).
+
+| Etapa do import | Detalhe |
+|---|---|
+| Normaliza o telefone | `+55 11 3229-1681` → `+551132291681`; sem DDI, assume Brasil pelo DDD |
+| Classifica | **celular** vs **fixo** — mandar mensagem para fixo queima cota e reputação |
+| Deduplica | por `place_id` e por telefone canônico, atravessando varreduras |
+| Descarta | fechado permanentemente, ou fora do raio pedido |
+
+**Custo.** O Apify cobra por lugar encontrado. A varredura de 8 lugares que validou esse
+fluxo custou US$ 0,04. Use *Quantidade por termo* como trava de gasto.
+
+O token do Apify fica em *Prospecção → Conta Apify → configurar* (Console do Apify →
+Settings → Integrations → API token), ou em `APIFY_TOKEN` no `.env`.
+
+### Abordagem ativa
+
+Aba **CRM**: filtre (só celular, por varredura, por etapa), selecione e dispare.
+
+O disparo entra numa **fila** com intervalo configurável entre envios e limite diário. O
+worker roda em background e retoma sozinho se o backend reiniciar. Cada tentativa grava
+request e response crus.
+
+Numa linha da **Evolution** o envio é texto livre — não há template aprovado nem janela
+de 24h. Numa linha da **Cloud API**, mensagem fria só entrega por template aprovado pela
+Meta (a aba lista os templates do WABA e marca quais estão aprovados); texto livre só
+funciona dentro da janela de 24h. Isso é regra da Meta, não limitação daqui.
+
+No texto e nas variáveis do template dá pra usar `{nome}`, `{categoria}` e `{cidade}` —
+cada envio é preenchido com os dados daquele prospect.
+
+Trava de segurança: `outreach_enabled` começa **desligado**.
+
+### Como a resposta fecha o ciclo
+
+Quando o prospect responde, o webhook chega e o ingest liga a mensagem ao registro do
+CRM: o prospect ganha `contact_id`, vira etapa **Respondeu**, e aparece em Leads pronto
+para o evento.
+
+O match não é por igualdade de string: no Brasil o número costuma vir **sem o nono
+dígito** de um lado e **com** do outro. `phones.match_key` gera uma chave canônica sem o
+nono dígito e é por ela que os dois lados se reconhecem.
+
+Etapas: `novo` → `contatado` → `respondeu` → `qualificado` → `ganho` / `perdido`.
+`contatado` é automático no envio; `respondeu`, na resposta. Mover à mão nunca é
+rebaixado pelo automático.
 
 ## Estrutura
 
 ```
 backend/app/
   __init__.py             carrega o .env antes de qualquer submodulo
-  main.py                 app + /api/health, /api/stats
-  ingest.py               webhook da Meta -> Contato + Mensagem, e liga a resposta ao CRM
+  main.py                 app, /api/health, /api/stats e o include dos routers
+                          (os módulos de admin entram com a dependência de login)
+  evolution_ingest.py     webhook da Evolution -> lead com atribuição -> regra -> evento
+  crm.py                  traz agenda, conversas e histórico da instância pro CRM da linha
+  ingest.py               mesmo caminho para o payload da Cloud API (canal legado)
+  firing.py               criação + envio de um evento: o caminho único de disparo
   tracking.py             extração de ctwa_clid / gclid / wbraid / UTMs
   phones.py               E.164, celular vs fixo, chave canônica do nono dígito
   settings_store.py       config env + override no banco, com mascaramento de segredo
-  models.py               wa_numbers, contacts, messages, conversions, dispatches,
-                          webhook_logs, prospect_searches, prospects, outreaches
   numbers.py              resolve a linha em jogo e funde credenciais + overrides no
                           formato de config que o resto do sistema já consumia
+  models.py               wa_numbers, keyword_rules, contacts (é também o card do CRM),
+                          messages, conversions, dispatches, webhook_logs, prospects,
+                          prospect_searches, outreaches
   migrations.py           ALTER TABLE idempotente rodado no startup
-  routers/                config, numbers, webhook, contacts, conversions, prospecting
+  routers/
+    evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
+    rules.py              regras de palavra-chave + /simulate
+    crm.py                conversas da linha: etapa, nota, sync, resposta e disparo
+    admin.py              login e a dependência que protege os módulos escondidos
+    webhook.py            /webhook/evolution (token por linha) e /webhook/whatsapp
+    contacts.py           leads e o log cru dos webhooks
+    conversions.py        disparo manual, histórico e retry
+    config.py             config global (admin)
+    numbers.py            linhas da Cloud API (admin)
+    prospecting.py        varredura, CRM e fila de abordagem (admin)
   services/
-    whatsapp_cloud.py     Graph API: status, subscribe, envio de texto e template
+    evolution.py          cliente da Evolution API, com fallback de formato v2 -> v1
+    rules.py              motor das palavras-chave: normalização, match e valor
+    meta_capi.py          montagem e envio do evento CAPI
+    whatsapp_cloud.py     Graph API: status, subscribe, texto e template
     apify.py              dispara o actor, acompanha o run, normaliza o lugar
     geo.py                geocode (Nominatim), haversine, área circular
-    meta_capi.py          montagem e envio do evento CAPI
     google_ads.py         OAuth + uploadClickConversions
     generic_webhook.py    POST assinado
     dispatch.py           orquestra os destinos e registra cada tentativa
@@ -255,27 +367,32 @@ backend/app/
 
 ## Notas
 
-- O payload de request é gravado **antes** do envio, então um destino que recusa
-  ainda deixa visível o JSON exato que foi montado.
+- O `externalAdReply` pode vir em profundidades diferentes conforme o tipo de mensagem
+  (texto, imagem com legenda, botão). A busca do `ctwaClid` é recursiva, em vez de fixar
+  um caminho que muda a cada tipo.
+- A atribuição **nunca é sobrescrita**. O bloco do anúncio só vem na primeira mensagem
+  depois do clique; nas seguintes o lead já carrega o `ctwa_clid`, e o ingest só preenche
+  campo que ainda estava vazio.
+- Mensagem repetida não vira lead nem evento duplicado: o `key.id` da Evolution é a
+  chave de dedupe, e a reentrega do mesmo evento é ignorada.
+- Grupo, status e newsletter são descartados na entrada — não são conversa de pessoa.
+- O resumo da última mensagem e o não-lido ficam desnormalizados em `contacts`: a lista do
+  CRM precisa deles em uma consulta só, e juntar `messages` por linha da tela não escala.
+  O sync nunca rebaixa esse resumo — o que o webhook gravou em tempo real é mais fresco.
+- O payload de request é gravado **antes** do envio, então um destino que recusa ainda
+  deixa visível o JSON exato que foi montado.
 - `event_id` é único por conversão; o Meta deduplica por ele, então o retry é seguro.
-- O webhook responde 200 mesmo em erro de processamento — a Meta reentrega em loop
-  caso contrário, e reentregar um payload quebrado não resolve nada. O erro fica no log.
-- Sem App Secret configurado, a validação de assinatura é ignorada. Preencha antes de
-  expor isso em produção. Na URL compartilhada, a assinatura é conferida contra o segredo
-  das linhas citadas no payload; na URL exclusiva, só contra o da própria linha.
+- O webhook responde 200 mesmo em erro de processamento — reentregar em loop um payload
+  quebrado não resolve nada, e o motivo fica no log.
+- O token da URL do webhook autentica **por linha**: um POST com o token de um cliente
+  não escreve na base de outro.
 - O cap diário e o intervalo da abordagem contam **por linha** — cada número tem a sua
-  reputação na Meta, então somar o volume de todos penalizaria quem não disparou. Uma
-  linha com a abordagem desligada não trava a fila das outras: os disparos dela ficam
-  esperando na fila até você ligar.
+  reputação, então somar o volume de todos penalizaria quem não disparou.
 - O dedupe do import de prospects também é por linha: a mesma empresa pode ser lead de
   dois clientes diferentes sem uma varredura anular a outra.
-- A sincronização da varredura é preguiçosa: as rotas de listagem conferem no Apify
-  qualquer busca ainda rodando e importam quando termina. Sem worker separado, nada fica
-  pendurado se o processo reiniciar — e ainda dá pra forçar com *sincronizar*.
-- Apagar uma varredura **não** apaga os prospects dela. A varredura é só a procedência;
-  os prospects são o CRM.
-- Número em ficha do Google Maps é dado de contato comercial público, mas abordagem em
-  massa tem consequência prática: reclamação de spam derruba a nota de qualidade do seu
-  número na Meta e pode limitar o envio. O intervalo entre envios, o limite diário e o
-  filtro de "só celular" existem para isso — mantenha o volume baixo e a mensagem
-  relevante.
+- Apagar uma varredura **não** apaga os prospects dela. A varredura é só a procedência.
+- A Evolution API não é um produto oficial da Meta. Ela conecta como dispositivo pareado,
+  o que significa risco de bloqueio do número se o volume e o conteúdo parecerem spam.
+  Número em ficha do Google Maps é dado de contato comercial público, mas abordagem em
+  massa tem consequência prática — o intervalo entre envios, o limite diário e o filtro
+  de "só celular" existem para isso.

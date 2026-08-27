@@ -30,7 +30,7 @@ from app import numbers as numbers_service
 from app import phones, settings_store
 from app.db import SessionLocal, get_session
 from app.models import STAGES, Outreach, Prospect, ProspectSearch, WaNumber
-from app.services import apify, geo, whatsapp_cloud
+from app.services import apify, evolution, geo, whatsapp_cloud
 
 log = logging.getLogger(__name__)
 
@@ -601,6 +601,12 @@ async def list_templates(
 ):
     """Templates do WABA da linha — cada numero tem os seus templates aprovados."""
     _, cfg = await _resolve(session, number_id)
+    if (cfg.get("channel") or "evolution") == "evolution":
+        # Evolution nao tem template aprovado: a abordagem sai como texto livre.
+        raise HTTPException(
+            status_code=400,
+            detail="Linha na Evolution API não usa template da Meta — a abordagem sai como texto livre.",
+        )
     try:
         raw = await whatsapp_cloud.message_templates(cfg)
     except Exception as exc:  # noqa: BLE001 — a UI mostra o motivo cru
@@ -666,12 +672,23 @@ def _build_outreach(
     if not to:
         raise ValueError("Prospect sem telefone valido.")
 
-    if payload.kind == "text":
+    evolution_line = (cfg.get("channel") or "evolution") == "evolution"
+
+    if payload.kind == "text" or evolution_line:
         body = (payload.text or "").strip()
         if not body:
-            raise ValueError("Texto da mensagem vazio.")
+            raise ValueError(
+                "Texto da mensagem vazio."
+                if payload.kind == "text"
+                else "Linha na Evolution API envia texto livre, não template: escreva a mensagem."
+            )
         body = _fill_params([body], prospect)[0]
-        request = whatsapp_cloud.build_text_payload(to, body)
+        # a Evolution nao tem template aprovado nem janela de 24h: e texto direto
+        request = (
+            evolution.build_text_payload(to, body)
+            if evolution_line
+            else whatsapp_cloud.build_text_payload(to, body)
+        )
         record = Outreach(
             prospect_id=prospect.id,
             wa_number_id=wa_number_id,
@@ -705,11 +722,17 @@ def _build_outreach(
 async def _send_one(session: AsyncSession, cfg: dict, record: Outreach, request: dict) -> Outreach:
     """Envia e grava o resultado. O payload vai pro banco antes do envio."""
     record.request_payload = request
+    evolution_line = (cfg.get("channel") or "evolution") == "evolution"
     try:
-        http_status, body = await whatsapp_cloud.send_message(cfg, request)
+        if evolution_line:
+            http_status, body = await evolution.send_message(cfg, request)
+            record.response_body = body if isinstance(body, dict) else {"data": body}
+            record.wamid = evolution.first_message_id(record.response_body)
+        else:
+            http_status, body = await whatsapp_cloud.send_message(cfg, request)
+            record.response_body = body if isinstance(body, dict) else {"data": body}
+            record.wamid = whatsapp_cloud.first_wamid(record.response_body)
         record.http_status = http_status
-        record.response_body = body if isinstance(body, dict) else {"data": body}
-        record.wamid = whatsapp_cloud.first_wamid(record.response_body)
         record.status = "sent"
         record.sent_at = datetime.now(timezone.utc)
     except Exception as exc:  # noqa: BLE001 — o erro da Meta e o que interessa aqui

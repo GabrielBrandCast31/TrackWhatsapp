@@ -1,29 +1,40 @@
-"""Plataforma de trackeamento de WhatsApp -> conversao em campanha.
+"""Plataforma de rastreamento de WhatsApp -> conversao em campanha.
 
-Fluxo: anuncio Click to WhatsApp -> webhook da Cloud API entrega o ctwa_clid ->
-a gente guarda o lead com a atribuicao -> voce dispara o evento de conversao pro
-Meta CAPI / Google Ads / webhook proprio e ve a resposta crua de cada destino.
+Fluxo: anuncio Click to WhatsApp -> a pessoa manda mensagem -> a **Evolution API**
+entrega a mensagem crua no nosso webhook, com o `ctwaClid` do anuncio -> o lead
+fica gravado com a atribuicao -> quando o ATENDENTE responde com a palavra-chave
+configurada, o evento sai pro Meta com o valor certo.
 
-A plataforma atende VARIOS numeros de WhatsApp ao mesmo tempo. Cada numero e uma
-linha isolada — leads, CRM e destinos de conversao proprios — e o roteamento do
-webhook e feito pelo `phone_number_id` que a Meta manda no payload.
+Duas superficies:
+
+* tela principal — conectar a instancia da Evolution, informar Pixel + token da
+  Conversions API e cadastrar as regras de palavra-chave (com simulador);
+* /api/admin — prospeccao no mapa, CRM, abordagem ativa, Cloud API e destinos
+  extras (Google Ads, webhook generico), tudo atras de login.
+
+A plataforma atende VARIAS linhas ao mesmo tempo: cada linha e uma instancia da
+Evolution com Pixel, token e regras proprios.
 """
 
 import logging
 import os
 
-from fastapi import FastAPI, Query
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
 from app import numbers as numbers_service
 from app.db import SessionLocal, init_db
-from app.models import Contact, Conversion, Dispatch, Outreach, Prospect
+from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect
+from app.routers import admin as admin_router
 from app.routers import config as config_router
 from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
+from app.routers import crm as crm_router
+from app.routers import evolution as evolution_router
 from app.routers import numbers as numbers_router
 from app.routers import prospecting as prospecting_router
+from app.routers import rules as rules_router
 from app.routers import webhook as webhook_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -38,12 +49,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(config_router.router)
-app.include_router(numbers_router.router)
+# --- rastreamento: o que a tela principal usa ---
+app.include_router(admin_router.router)
+app.include_router(evolution_router.router)
+app.include_router(rules_router.router)
+app.include_router(crm_router.router)
 app.include_router(contacts_router.router)
 app.include_router(conversions_router.router)
-app.include_router(prospecting_router.router)
 app.include_router(webhook_router.router)
+
+# --- legado, atras de login (prospeccao, CRM, Cloud API, destinos extras) ---
+# A protecao mora aqui, no include: qualquer rota nova desses routers ja nasce
+# protegida, sem depender de alguem lembrar de decorar a funcao.
+_admin_only = [Depends(admin_router.require_admin)]
+app.include_router(config_router.router, dependencies=_admin_only)
+app.include_router(numbers_router.router, dependencies=_admin_only)
+app.include_router(prospecting_router.router, dependencies=_admin_only)
 
 
 @app.on_event("startup")
@@ -119,7 +140,18 @@ async def stats(number_id: int | None = Query(default=None)):
                 scoped(select(func.count(Prospect.id)).where(Prospect.replied_at.is_not(None)), Prospect)
             )
         ).scalar_one()
-        numbers_count = len(await numbers_service.list_numbers(session))
+        numbers_count = len(await numbers_service.list_numbers(session, channel="evolution"))
+        rules_count = (await session.execute(select(func.count(KeywordRule.id)))).scalar_one()
+        rule_conversions = (
+            await session.execute(
+                scoped(
+                    select(func.count(Conversion.id))
+                    .join(Contact, Contact.id == Conversion.contact_id)
+                    .where(Conversion.source == "rule"),
+                    Contact,
+                )
+            )
+        ).scalar_one()
 
     return {
         "contacts": total_contacts,
@@ -130,4 +162,6 @@ async def stats(number_id: int | None = Query(default=None)):
         "outreach_sent": outreach_sent,
         "prospects_replied": replied,
         "numbers": numbers_count,
+        "rules": rules_count,
+        "rule_conversions": rule_conversions,
     }

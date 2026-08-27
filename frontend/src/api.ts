@@ -2,12 +2,40 @@ const BASE = import.meta.env.VITE_API_URL ?? ''
 
 export class ApiError extends Error {}
 
+/** 401 numa rota de admin: a sessão caiu e a tela precisa pedir login de novo. */
+export class UnauthorizedError extends ApiError {}
+
+const ADMIN_KEY = 'wa.adminToken'
+
+export const adminToken = {
+  get(): string | null {
+    try {
+      return sessionStorage.getItem(ADMIN_KEY)
+    } catch {
+      return null
+    }
+  },
+  set(token: string | null) {
+    try {
+      if (token) sessionStorage.setItem(ADMIN_KEY, token)
+      else sessionStorage.removeItem(ADMIN_KEY)
+    } catch {
+      // navegador sem storage: a sessão de admin vale só enquanto a aba estiver aberta
+    }
+  },
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
+  const token = adminToken.get()
   try {
     res = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'X-Admin-Token': token } : {}),
+        ...(init?.headers ?? {}),
+      },
     })
   } catch {
     // fetch só rejeita quando a requisição nem sai: backend fora do ar, DNS, CORS
@@ -30,6 +58,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // "Not Found" cru é o 404 do FastAPI para rota inexistente — quase sempre
     // container servindo código antigo. Um 404 dos nossos handlers vem com texto
     // próprio ("Prospect nao encontrado") e passa direto.
+    if (res.status === 401) throw new UnauthorizedError(detail)
+
     if (res.status === 404 && detail === 'Not Found') {
       throw new ApiError(
         `A rota ${path} não existe nesse backend (404). Se você acabou de atualizar o código, ` +
@@ -94,6 +124,8 @@ export type Conversion = {
   currency: string
   note: string | null
   is_test: boolean
+  source?: 'manual' | 'rule' | 'auto'
+  rule_id?: number | null
   created_at: string
   dispatches: Dispatch[]
   contact?: { id: number; wa_id: string; name: string | null }
@@ -121,6 +153,7 @@ export type ConfigResponse = {
 export type WaNumber = {
   id: number
   label: string
+  channel?: string
   phone_number_id: string
   business_account_id: string | null
   verify_token: string | null
@@ -156,6 +189,8 @@ export type Stats = {
   prospects: number
   outreach_sent: number
   prospects_replied: number
+  rules?: number
+  rule_conversions?: number
 }
 
 // --- CRM de prospecção ---
@@ -347,7 +382,7 @@ export const prospectApi = {
 }
 
 export const numbersApi = {
-  list: () => request<WaNumber[]>('/api/numbers'),
+  list: (channel?: 'cloud' | 'evolution') => request<WaNumber[]>(`/api/numbers${qs({ channel })}`),
   get: (id: number) => request<WaNumber>(`/api/numbers/${id}`),
   create: (payload: Record<string, unknown>) =>
     request<WaNumber>('/api/numbers', { method: 'POST', body: JSON.stringify(payload) }),
@@ -369,6 +404,261 @@ export const numbersApi = {
       `/api/numbers/${id}/adopt-orphans`,
       { method: 'POST' },
     ),
+}
+
+// --- CRM da linha: as conversas daquele número ---
+
+export const CRM_STAGES = ['novo', 'atendendo', 'qualificado', 'ganho', 'perdido'] as const
+export type CrmStage = (typeof CRM_STAGES)[number]
+
+export const CRM_STAGE_LABEL: Record<CrmStage, string> = {
+  novo: 'Novo',
+  atendendo: 'Atendendo',
+  qualificado: 'Qualificado',
+  ganho: 'Ganho',
+  perdido: 'Perdido',
+}
+
+export type CrmContact = {
+  id: number
+  wa_id: string
+  wa_number_id: number | null
+  phone_e164: string | null
+  name: string | null
+  profile_pic_url: string | null
+  stage: CrmStage
+  note: string | null
+  origin: 'webhook' | 'sync' | 'simulado' | string
+  unread_count: number
+  last_message_at: string | null
+  last_message_body: string | null
+  last_message_from_me: boolean
+  first_message: string | null
+  created_at: string
+  last_seen_at: string
+  synced_at: string | null
+  conversions: number
+  attribution: Attribution
+  attributable_meta: boolean
+  attributable_google: boolean
+}
+
+export type CrmMessage = {
+  id: number
+  direction: string
+  type: string | null
+  body: string | null
+  sent_at: string
+}
+
+export type CrmContactDetail = CrmContact & {
+  messages: CrmMessage[]
+  conversion_events: Conversion[]
+}
+
+export type CrmPipeline = {
+  stages: Record<CrmStage, number>
+  total: number
+  attributed: number
+  unread: number
+  from_sync: number
+}
+
+export type CrmFilters = {
+  number_id?: number
+  stage?: string
+  q?: string
+  only_attributed?: boolean
+  order?: 'last_message' | 'created' | 'name'
+}
+
+export type CrmSyncResult = {
+  number_id: number
+  chats: number
+  contacts: number
+  created: number
+  updated: number
+  messages: number
+  skipped: number
+  errors: string[]
+}
+
+export const crmApi = {
+  stages: () => request<{ value: CrmStage; label: string }[]>('/api/crm/stages'),
+  contacts: (filters: CrmFilters = {}) =>
+    request<CrmContact[]>(`/api/crm/contacts${qs(filters as Record<string, unknown>)}`),
+  pipeline: (numberId?: number) =>
+    request<CrmPipeline>(`/api/crm/pipeline${qs({ number_id: numberId })}`),
+  contact: (id: number) => request<CrmContactDetail>(`/api/crm/contacts/${id}`),
+  patch: (id: number, patch: Record<string, unknown>) =>
+    request<CrmContact>(`/api/crm/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  sync: (numberId: number) =>
+    request<CrmSyncResult>(`/api/crm/sync${qs({ number_id: numberId })}`, { method: 'POST' }),
+  syncMessages: (id: number) =>
+    request<{ fetched: number; saved: number }>(`/api/crm/contacts/${id}/messages/sync`, {
+      method: 'POST',
+    }),
+  reply: (id: number, text: string) =>
+    request<{ sent: boolean }>(`/api/crm/contacts/${id}/reply`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+}
+
+// --- instâncias da Evolution API (a "linha" da tela principal) ---
+
+export type EvoInstance = {
+  id: number
+  label: string
+  channel: string
+  instance: string | null
+  base_url: string | null
+  state: string | null
+  owner_jid: string | null
+  display_phone_number: string | null
+  verified_name: string | null
+  last_checked_at: string | null
+  last_error: string | null
+  active: boolean
+  is_default: boolean
+  note: string | null
+  created_at: string
+  webhook_url: string
+  api_key__set: boolean
+  api_key__hint: string
+  meta_dataset_id: string
+  meta_test_event_code: string
+  meta_capi_token__set: boolean
+  meta_capi_token__hint: string
+  enabled_destinations: string[]
+  counts: { contacts?: number; conversions?: number; rules?: number }
+}
+
+export type EvoStatus = {
+  number_id: number
+  configured: boolean
+  connected: boolean
+  state: string | null
+  owner_jid?: string | null
+  profile_name?: string | null
+  errors: string[]
+  webhook_url: string
+  webhook_configured?: string | null
+  webhook_matches?: boolean
+  webhook_error?: string
+}
+
+export type EvoQr = {
+  base64?: string | null
+  code?: string | null
+  pairing_code?: string | null
+  state?: string | null
+}
+
+export type EvoDefaults = {
+  base_url: string
+  api_key__set: boolean
+  webhook_base: string
+  events: { name: string; label: string; accepts_value: boolean }[]
+  webhook_events: string[]
+}
+
+export const evolutionApi = {
+  list: () => request<EvoInstance[]>('/api/evolution/instances'),
+  defaults: () => request<EvoDefaults>('/api/evolution/defaults'),
+  create: (payload: Record<string, unknown>) =>
+    request<EvoInstance>('/api/evolution/instances', { method: 'POST', body: JSON.stringify(payload) }),
+  patch: (id: number, patch: Record<string, unknown>) =>
+    request<EvoInstance>(`/api/evolution/instances/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  remove: (id: number, purge = false) =>
+    request<void>(`/api/evolution/instances/${id}${qs({ purge })}`, { method: 'DELETE' }),
+  status: (id: number) => request<EvoStatus>(`/api/evolution/instances/${id}/status`),
+  connect: (id: number) => request<EvoQr>(`/api/evolution/instances/${id}/connect`, { method: 'POST' }),
+  setWebhook: (id: number) =>
+    request<{ webhook_url: string; events: string[]; response: unknown }>(
+      `/api/evolution/instances/${id}/webhook`,
+      { method: 'POST' },
+    ),
+  sendTest: (id: number, to: string, body: string) =>
+    request<unknown>(`/api/evolution/instances/${id}/send-test`, {
+      method: 'POST',
+      body: JSON.stringify({ to, body }),
+    }),
+  simulate: (id: number, payload: Record<string, unknown>) =>
+    request<{ summary: string; contact_ids: number[]; rules: unknown[] }>(
+      `/api/evolution/instances/${id}/simulate`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+}
+
+// --- regras de palavra-chave ---
+
+export type MatchMode = 'broad' | 'exact'
+export type ValueMode = 'none' | 'fixed' | 'extract'
+export type RuleDirection = 'attendant' | 'customer' | 'any'
+
+export type KeywordRule = {
+  id: number
+  wa_number_id: number | null
+  event_name: string
+  keyword: string
+  match_mode: MatchMode
+  direction: RuleDirection
+  value_mode: ValueMode
+  value_fixed: number | null
+  currency: string
+  require_attribution: boolean
+  once_per_contact: boolean
+  is_test: boolean
+  active: boolean
+  hits: number
+  last_fired_at: string | null
+  created_at: string
+}
+
+export type RuleOption = { value: string; label: string; help: string }
+
+export type RuleCatalog = {
+  events: { name: string; label: string; accepts_value: boolean }[]
+  match_modes: RuleOption[]
+  value_modes: RuleOption[]
+  directions: RuleOption[]
+}
+
+export type SimulationResult = {
+  event_name: string
+  fires: boolean
+  matched: boolean
+  value: number | null
+  currency: string
+  reason: string
+  value_note: string
+  normalized_text: string
+  normalized_keyword: string
+  direction_label: string
+}
+
+export const rulesApi = {
+  catalog: () => request<RuleCatalog>('/api/rules/catalog'),
+  list: (numberId?: number) => request<KeywordRule[]>(`/api/rules${qs({ number_id: numberId })}`),
+  create: (payload: Record<string, unknown>) =>
+    request<KeywordRule>('/api/rules', { method: 'POST', body: JSON.stringify(payload) }),
+  patch: (id: number, patch: Record<string, unknown>) =>
+    request<KeywordRule>(`/api/rules/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  remove: (id: number) => request<void>(`/api/rules/${id}`, { method: 'DELETE' }),
+  simulate: (payload: Record<string, unknown>) =>
+    request<SimulationResult>('/api/rules/simulate', { method: 'POST', body: JSON.stringify(payload) }),
+}
+
+// --- área de admin ---
+
+export const adminApi = {
+  login: (username: string, password: string) =>
+    request<{ token: string; expires_at: number; user: string }>('/api/admin/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  session: () => request<{ user: string; ok: boolean }>('/api/admin/session'),
 }
 
 export const api = {

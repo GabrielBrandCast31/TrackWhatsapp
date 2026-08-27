@@ -60,7 +60,7 @@ def _ts(message: dict) -> datetime:
         return datetime.now(timezone.utc)
 
 
-async def _upsert_contact(
+async def upsert_contact(
     session: AsyncSession,
     wa_id: str,
     name: str | None,
@@ -102,7 +102,7 @@ async def _upsert_contact(
     return contact, created
 
 
-async def _link_prospect(session: AsyncSession, contact: Contact) -> int | None:
+async def link_prospect(session: AsyncSession, contact: Contact) -> int | None:
     """Se quem mandou a mensagem foi alguem que a gente abordou, fecha o ciclo do CRM.
 
     O wa_id brasileiro chega sem o nono digito e o Google Maps devolve com — por isso
@@ -219,7 +219,7 @@ async def ingest_payload(
 
                 text = _text_of(message)
                 attribution = extract(message.get("referral"), text)
-                contact, created = await _upsert_contact(
+                contact, created = await upsert_contact(
                     session, wa_id, profiles.get(wa_id), attribution, phone_number_id, wa_number_id
                 )
                 if created:
@@ -229,7 +229,7 @@ async def ingest_payload(
                 if not contact.first_message and text:
                     contact.first_message = text
 
-                prospect_id = await _link_prospect(session, contact)
+                prospect_id = await link_prospect(session, contact)
                 if prospect_id is not None:
                     prospects_replied.append(prospect_id)
 

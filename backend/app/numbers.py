@@ -18,15 +18,32 @@ from app.models import Contact, Outreach, Prospect, ProspectSearch, WaNumber
 
 log = logging.getLogger(__name__)
 
-# Credenciais da Cloud API: moram em coluna propria porque sao a identidade do numero.
+# Credenciais do canal: moram em coluna propria porque sao a identidade da linha.
+# Os dois canais convivem — Evolution API (padrao) e Cloud API (area de admin) —
+# e `effective_cfg` joga os dois no mesmo dict, entao quem envia so olha `channel`.
 CREDENTIAL_MAP = {
+    # Cloud API (Meta oficial)
     "wa_access_token": "access_token",
     "wa_phone_number_id": "phone_number_id",
     "wa_business_account_id": "business_account_id",
     "wa_verify_token": "verify_token",
     "wa_app_secret": "app_secret",
     "graph_version": "graph_version",
+    # Evolution API
+    "channel": "channel",
+    "evo_base_url": "evo_base_url",
+    "evo_api_key": "evo_api_key",
+    "evo_instance": "evo_instance",
 }
+
+# Prefixo da chave de roteamento das linhas Evolution. `phone_number_id` e NOT NULL
+# e unico desde a versao Cloud-only; guardar "evo:<instance>" nele mantem unicidade
+# e roteamento sem recriar a tabela — e nunca colide com um id real da Meta.
+EVO_KEY_PREFIX = "evo:"
+
+
+def evo_routing_key(instance: str) -> str:
+    return f"{EVO_KEY_PREFIX}{instance.strip()}"
 
 # O que um numero pode sobrescrever da config global (destinos + abordagem).
 OVERRIDABLE = (
@@ -51,6 +68,7 @@ OVERRIDABLE = (
     "default_event_name",
     "default_currency",
     "auto_fire_on_first_message",
+    "auto_fire_event_name",
 )
 
 OVERRIDE_SECRETS = {"meta_capi_token", "webhook_secret"}
@@ -83,10 +101,14 @@ def effective_cfg(global_cfg: dict, number: WaNumber | None) -> dict:
     return cfg
 
 
-async def list_numbers(session: AsyncSession, only_active: bool = False) -> list[WaNumber]:
+async def list_numbers(
+    session: AsyncSession, only_active: bool = False, channel: str | None = None
+) -> list[WaNumber]:
     stmt = select(WaNumber).order_by(WaNumber.is_default.desc(), WaNumber.id)
     if only_active:
         stmt = stmt.where(WaNumber.active.is_(True))
+    if channel is not None:
+        stmt = stmt.where(WaNumber.channel == channel)
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -103,6 +125,28 @@ async def by_phone_number_id(session: AsyncSession, phone_number_id: str | None)
         return None
     return (
         await session.execute(select(WaNumber).where(WaNumber.phone_number_id == str(phone_number_id)))
+    ).scalar_one_or_none()
+
+
+async def by_evo_instance(session: AsyncSession, instance: str | None) -> WaNumber | None:
+    """Linha Evolution pelo nome da instancia — e o que o payload do webhook traz."""
+    if not instance:
+        return None
+    return (
+        await session.execute(
+            select(WaNumber)
+            .where(WaNumber.channel == "evolution")
+            .where(WaNumber.evo_instance == str(instance).strip())
+        )
+    ).scalar_one_or_none()
+
+
+async def by_webhook_token(session: AsyncSession, token: str | None) -> WaNumber | None:
+    """Linha pelo segredo que vai na URL do webhook."""
+    if not token:
+        return None
+    return (
+        await session.execute(select(WaNumber).where(WaNumber.webhook_token == str(token)))
     ).scalar_one_or_none()
 
 
@@ -157,6 +201,7 @@ async def seed_from_global_settings(session: AsyncSession) -> WaNumber | None:
         app_secret=cfg.get("wa_app_secret") or None,
         verify_token=cfg.get("wa_verify_token") or None,
         graph_version=cfg.get("graph_version") or None,
+        channel="cloud",
         active=True,
         is_default=True,
         overrides={},

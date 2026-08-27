@@ -14,6 +14,7 @@ from app.models import Setting
 SETTINGS_KEY = "config"
 
 SECRET_FIELDS = {
+    "evo_api_key",
     "wa_access_token",
     "wa_app_secret",
     "meta_capi_token",
@@ -25,7 +26,12 @@ SECRET_FIELDS = {
 }
 
 DEFAULTS: dict = {
-    # --- WhatsApp Cloud API ---
+    # --- Evolution API (canal padrao) ---
+    # Servem de base pra novas linhas: quem usa uma Evolution so nao precisa
+    # repetir URL e apikey em cada instancia.
+    "evo_base_url": os.getenv("EVOLUTION_BASE_URL", ""),
+    "evo_api_key": os.getenv("EVOLUTION_API_KEY", ""),
+    # --- WhatsApp Cloud API (canal legado, area de admin) ---
     "wa_access_token": os.getenv("WA_ACCESS_TOKEN", ""),
     "wa_phone_number_id": os.getenv("WA_PHONE_NUMBER_ID", ""),
     "wa_business_account_id": os.getenv("WA_BUSINESS_ACCOUNT_ID", ""),
@@ -68,7 +74,10 @@ DEFAULTS: dict = {
     # --- Comportamento ---
     "default_event_name": "Lead",
     "default_currency": "BRL",
+    # primeiro contato vindo de anuncio dispara um evento leve na hora. O evento
+    # de valor real fica com as regras de palavra-chave.
     "auto_fire_on_first_message": False,
+    "auto_fire_event_name": "Contact",
 }
 
 

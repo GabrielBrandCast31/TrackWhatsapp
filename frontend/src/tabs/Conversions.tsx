@@ -48,7 +48,7 @@ export default function Conversions({ onChanged }: { onChanged: () => void }) {
       title="Eventos de conversão enviados"
       subtitle={`${
         current?.label ?? 'Todas as linhas'
-      } — cada disparo guarda o payload que saiu e a resposta de cada destino.`}
+      } — cada disparo guarda o payload que saiu e a resposta do destino.`}
       actions={
         <Button size="sm" onClick={() => void load()}>
           atualizar
@@ -66,6 +66,8 @@ export default function Conversions({ onChanged }: { onChanged: () => void }) {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold text-ink-100">{c.event_name}</span>
+                    {c.source === 'rule' && <Badge tone="good">palavra-chave</Badge>}
+                    {c.source === 'auto' && <Badge tone="info">automático</Badge>}
                     {c.is_test && <Badge tone="warn">teste</Badge>}
                     {c.value !== null && (
                       <Badge tone="info">

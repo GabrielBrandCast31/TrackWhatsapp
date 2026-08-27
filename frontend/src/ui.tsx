@@ -203,6 +203,100 @@ export function Banner({ tone, children }: { tone: 'good' | 'bad' | 'warn'; chil
   return <div className={`rounded-lg border px-3.5 py-2.5 text-xs leading-relaxed ${tones[tone]}`}>{children}</div>
 }
 
+/** Ponto de interrogação com a explicação do campo — igual aos ⓘ do desenho. */
+export function Info({ text }: { text: string }) {
+  return (
+    <span
+      title={text}
+      aria-label={text}
+      className="inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-ink-700 text-[9px] font-semibold leading-none text-ink-500"
+    >
+      i
+    </span>
+  )
+}
+
+export function Radio({
+  name,
+  value,
+  checked,
+  label,
+  help,
+  onChange,
+}: {
+  name: string
+  value: string
+  checked: boolean
+  label: string
+  help?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-ink-100">
+      <input
+        type="radio"
+        name={name}
+        value={value}
+        checked={checked}
+        onChange={() => onChange(value)}
+        className="h-3.5 w-3.5 accent-wa-500"
+      />
+      <span>{label}</span>
+      {help && <Info text={help} />}
+    </label>
+  )
+}
+
+export function RadioGroup({
+  name,
+  value,
+  options,
+  onChange,
+}: {
+  name: string
+  value: string
+  options: { value: string; label: string; help?: string }[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+      {options.map((o) => (
+        <Radio
+          key={o.value}
+          name={name}
+          value={o.value}
+          checked={value === o.value}
+          label={o.label}
+          help={o.help}
+          onChange={onChange}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** Botão de lixeira — a ação destrutiva de uma linha de lista. */
+export function TrashButton({ onClick, title = 'remover' }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-red-900/60 bg-red-950/30 text-red-300 transition-colors hover:bg-red-950/60"
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  )
+}
+
+export function money(value: number | null | undefined, currency = 'BRL') {
+  if (value === null || value === undefined) return '—'
+  return value.toLocaleString('pt-BR', { style: 'currency', currency })
+}
+
 export function when(date: string) {
   return new Date(date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' })
 }
