@@ -53,7 +53,9 @@ _BACKFILL: tuple[tuple[str, str, str], ...] = (
     ("contacts", "stage", "'novo'"),
     ("contacts", "origin", "'webhook'"),
     ("contacts", "unread_count", "0"),
-    ("contacts", "last_message_from_me", "0"),
+    # BOOLEAN: o literal precisa ser FALSE, nao 0 — o Postgres recusa o integer
+    # (DatatypeMismatchError) e o SQLite aceita FALSE desde a 3.23.
+    ("contacts", "last_message_from_me", "FALSE"),
 )
 
 # indices unicos que deixaram de ser unicos ao virar multi-numero

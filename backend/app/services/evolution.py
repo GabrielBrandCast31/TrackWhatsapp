@@ -64,6 +64,18 @@ def _unwrap(resp: httpx.Response) -> Any:
         body = resp.json()
     except ValueError:
         body = {"raw": resp.text[:2000]}
+        # HTML com 200 nao e a Evolution respondendo: e um servidor qualquer no
+        # endereco configurado. O caso comum e apontar evo_base_url pra esta
+        # propria app — o fallback de SPA do nginx devolve index.html em qualquer
+        # caminho, e sem este aviso o erro reaparece la na frente como "faltou o
+        # QR", culpando a Evolution por um endereco errado.
+        if resp.status_code < 400 and "html" in resp.headers.get("content-type", "").lower():
+            raise EvolutionError(
+                f"{resp.url} respondeu uma pagina HTML, nao a API da Evolution. "
+                "Confira a URL da Evolution API nesta linha — ela deve apontar pro "
+                "servidor da Evolution, nao pra esta aplicacao (essa URL vai no "
+                "PUBLIC_BASE_URL)."
+            )
 
     if resp.status_code >= 400:
         raise EvolutionError(f"HTTP {resp.status_code}: {_error_text(body)}")
@@ -105,6 +117,12 @@ async def _post_either(cfg: dict, path: str, v2_body: dict, v1_body: dict) -> An
 
     So o 400 (payload invalido) justifica a segunda tentativa: 401 e 404 sao
     apikey errada e instancia inexistente, e insistir neles esconderia o motivo.
+
+    Mas nem todo 400 e recusa de formato: "numero nao existe no WhatsApp" e
+    "Text is required" tambem sao 400, e nesses o v1 e tentado em vao. Como o
+    corpo v1 nao tem `text` no topo, a v2 do servidor responde `instance requires
+    property "text"` — um erro de schema que substituia o motivo verdadeiro na
+    tela. Por isso o erro do v2 e o que sobe quando as duas tentativas falham.
     """
     try:
         return await _request(cfg, "POST", path, json=v2_body)
@@ -112,7 +130,10 @@ async def _post_either(cfg: dict, path: str, v2_body: dict, v1_body: dict) -> An
         if "HTTP 400" not in str(exc):
             raise
         log.info("evolution: %s recusou o formato v2, tentando v1", path)
-        return await _request(cfg, "POST", path, json=v1_body)
+        try:
+            return await _request(cfg, "POST", path, json=v1_body)
+        except EvolutionError:
+            raise exc from None
 
 
 # ---------------------------------------------------------------------------
