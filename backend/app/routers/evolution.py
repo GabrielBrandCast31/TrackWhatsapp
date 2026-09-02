@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import numbers as numbers_service
-from app import settings_store
+from app import phones, settings_store
 from app.db import get_session
 from app.models import Contact, Conversion, KeywordRule, WaNumber
 from app.services import evolution
@@ -78,6 +78,9 @@ class InstanceIn(BaseModel):
     note: str | None = None
     active: bool = True
     is_default: bool = False
+    # cria a instancia na Evolution junto com a linha, em vez de exigir que
+    # alguem crie por fora (painel da Evolution, curl) antes de cadastrar aqui
+    create_on_evolution: bool = False
 
 
 class InstancePatch(BaseModel):
@@ -165,6 +168,36 @@ async def defaults(session: AsyncSession = Depends(get_session)):
     }
 
 
+@router.get("/available")
+async def available_instances(
+    base_url: str | None = Query(default=None),
+    api_key: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+):
+    """Instancias que existem na Evolution, pra tela oferecer em vez de texto livre.
+
+    Aceita URL/apikey por query porque o formulario precisa consultar ANTES de a
+    linha existir; sem elas, cai nas globais.
+    """
+    cfg = dict(await settings_store.load(session))
+    if base_url:
+        cfg["evo_base_url"] = base_url.strip()
+    if api_key:
+        cfg["evo_api_key"] = api_key.strip()
+
+    taken = {
+        n.evo_instance
+        for n in await numbers_service.list_numbers(session, channel="evolution")
+        if n.evo_instance
+    }
+    try:
+        rows = await evolution.list_instances(cfg)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # `registered` deixa a tela separar o que ja tem linha do que esta livre
+    return [{**row, "registered": row["name"] in taken} for row in rows]
+
+
 @router.post("/instances")
 async def create_instance(payload: InstanceIn, session: AsyncSession = Depends(get_session)):
     instance = payload.instance.strip()
@@ -186,6 +219,12 @@ async def create_instance(payload: InstanceIn, session: AsyncSession = Depends(g
         overrides={},
     )
     _apply_meta(number, payload)
+
+    if payload.create_on_evolution:
+        # antes de gravar a linha: se a criacao falhar, nao fica linha apontando
+        # pra instancia que nao existe — o estado que dava 404 so no QR.
+        await _ensure_on_evolution(numbers_service.effective_cfg(global_cfg, number), instance)
+
     session.add(number)
     await session.flush()
 
@@ -196,6 +235,33 @@ async def create_instance(payload: InstanceIn, session: AsyncSession = Depends(g
     await session.commit()
     await session.refresh(number)
     return serialize(number, await _counts(session, number.id), await _cfg(session, number))
+
+
+async def _ensure_on_evolution(cfg: dict, instance: str) -> dict:
+    """Cria a instancia se ela ainda nao existir. Idempotente de proposito:
+    o botao pode ser clicado duas vezes, e criar de novo daria erro de nome em uso."""
+    try:
+        existing = {row["name"] for row in await evolution.list_instances(cfg)}
+        if instance in existing:
+            return {"created": False, "instance": instance}
+        created = await evolution.create_instance(cfg, instance)
+        log.info("evolution: instancia %s criada", instance)
+        return {"created": True, "instance": created.get("name") or instance, "state": created.get("state")}
+    except evolution.EvolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/instances/{number_id}/provision")
+async def provision_instance(number_id: int, session: AsyncSession = Depends(get_session)):
+    """Cria na Evolution a instancia que esta linha aponta.
+
+    Resolve a linha que ja foi cadastrada com um nome que nao existe lá — o caso
+    que antes so aparecia como `404 The "x" instance does not exist` no QR.
+    """
+    number = await _require(session, number_id)
+    if not number.evo_instance:
+        raise HTTPException(status_code=400, detail="Esta linha não tem nome de instância.")
+    return await _ensure_on_evolution(await _cfg(session, number), number.evo_instance)
 
 
 @router.patch("/instances/{number_id}")
@@ -358,9 +424,18 @@ async def instance_send_test(
     number_id: int, payload: SendTest, session: AsyncSession = Depends(get_session)
 ):
     number = await _require(session, number_id)
-    to = "".join(c for c in payload.to if c.isdigit())
-    if not to:
-        raise HTTPException(status_code=400, detail="Número inválido.")
+    # `to_e164` poe o DDI em numero nacional de 10/11 digitos com DDD valido.
+    # Sem isso, digitar "31971319392" (sem o 55) chega na Evolution como um numero
+    # que nao existe, e o erro fala de `exists: False` em vez do DDI que faltou.
+    e164 = phones.to_e164(payload.to)
+    if not e164:
+        raise HTTPException(
+            status_code=400,
+            detail="Número inválido. Use DDI + DDD + número — ex.: 5531971319392.",
+        )
+    to = phones.digits(e164)
+    if not payload.body.strip():
+        raise HTTPException(status_code=400, detail="A mensagem não pode ficar vazia.")
     try:
         return await evolution.send_text(await _cfg(session, number), to, payload.body)
     except Exception as exc:  # noqa: BLE001

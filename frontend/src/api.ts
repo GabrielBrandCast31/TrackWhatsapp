@@ -548,6 +548,15 @@ export type EvoStatus = {
   webhook_error?: string
 }
 
+/** Uma instância que existe na Evolution — `registered` diz se já tem linha aqui. */
+export type EvoAvailable = {
+  name: string
+  state: string | null
+  owner_jid: string | null
+  profile_name: string | null
+  registered: boolean
+}
+
 export type EvoQr = {
   base64?: string | null
   code?: string | null
@@ -572,6 +581,15 @@ export const evolutionApi = {
     request<EvoInstance>(`/api/evolution/instances/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   remove: (id: number, purge = false) =>
     request<void>(`/api/evolution/instances/${id}${qs({ purge })}`, { method: 'DELETE' }),
+  /** Instâncias que existem na Evolution. URL/apikey opcionais: o formulário
+   *  precisa consultar antes de a linha existir; sem elas o backend usa as globais. */
+  available: (baseUrl?: string, apiKey?: string) =>
+    request<EvoAvailable[]>(`/api/evolution/available${qs({ base_url: baseUrl, api_key: apiKey })}`),
+  provision: (id: number) =>
+    request<{ created: boolean; instance: string; state?: string | null }>(
+      `/api/evolution/instances/${id}/provision`,
+      { method: 'POST' },
+    ),
   status: (id: number) => request<EvoStatus>(`/api/evolution/instances/${id}/status`),
   connect: (id: number) => request<EvoQr>(`/api/evolution/instances/${id}/connect`, { method: 'POST' }),
   setWebhook: (id: number) =>

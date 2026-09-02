@@ -177,6 +177,58 @@ async def fetch_instance(cfg: dict) -> dict:
     )
 
 
+async def list_instances(cfg: dict) -> list[dict]:
+    """Todas as instancias que existem nessa Evolution — sem filtro de nome.
+
+    Serve pra tela oferecer o que ja existe em vez de campo de texto livre: o
+    nome tem que casar exatamente com o da Evolution, e digitar errado da 404 so
+    duas telas depois, no QR.
+
+    Nao usa `_instance(cfg)`: a chamada e do servidor inteiro, e a linha pode
+    ainda nao ter instancia escolhida.
+    """
+    body = await _request(cfg, "GET", "/instance/fetchInstances")
+    out = []
+    for row in body if isinstance(body, list) else [body]:
+        if not isinstance(row, dict):
+            continue
+        flat = row.get("instance") if isinstance(row.get("instance"), dict) else row
+        name = flat.get("name") or flat.get("instanceName")
+        if not name:
+            continue
+        out.append({
+            "name": str(name),
+            "state": flat.get("connectionStatus") or flat.get("state") or flat.get("status"),
+            "owner_jid": flat.get("ownerJid") or flat.get("owner"),
+            "profile_name": flat.get("profileName") or flat.get("profileStatus"),
+        })
+    return out
+
+
+async def create_instance(cfg: dict, name: str, integration: str = "WHATSAPP-BAILEYS") -> dict:
+    """Cria a instancia na Evolution. `qrcode: false` — o QR vem do /connect.
+
+    Sem isso o cadastro de linha era um ponteiro pra algo que alguem tinha que
+    criar por fora (painel da Evolution, curl), e a tela so acusava no QR.
+    """
+    body = await _request(
+        cfg,
+        "POST",
+        "/instance/create",
+        json={"instanceName": name.strip(), "qrcode": False, "integration": integration},
+    )
+    inner = body.get("instance") if isinstance(body, dict) else None
+    flat = inner if isinstance(inner, dict) else (body if isinstance(body, dict) else {})
+    return {
+        "name": flat.get("instanceName") or flat.get("name") or name.strip(),
+        "state": flat.get("status") or flat.get("connectionStatus") or flat.get("state"),
+        # token da instancia: a plataforma usa a apikey global, mas quem opera a
+        # Evolution por fora pode precisar dele
+        "hash": body.get("hash") if isinstance(body, dict) else None,
+        "raw": body,
+    }
+
+
 async def connect(cfg: dict) -> dict:
     """QR code / codigo de pareamento para conectar a linha."""
     body = await _request(cfg, "GET", f"/instance/connect/{_instance(cfg)}")

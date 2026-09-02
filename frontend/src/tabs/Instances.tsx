@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react'
 
-import { api, evolutionApi, type EvoDefaults, type EvoInstance, type EvoQr, type EvoStatus } from '../api'
+import {
+  api,
+  evolutionApi,
+  type EvoAvailable,
+  type EvoDefaults,
+  type EvoInstance,
+  type EvoQr,
+  type EvoStatus,
+} from '../api'
 import { useNumber } from '../numberContext'
-import { Badge, Banner, Button, Card, Copy, Empty, Field, Input, Json, Textarea, when } from '../ui'
+import { Badge, Banner, Button, Card, Copy, Empty, Field, Input, Json, Textarea, Toggle, when } from '../ui'
 
 type Draft = {
   label: string
@@ -10,9 +18,12 @@ type Draft = {
   base_url: string
   api_key: string
   note: string
+  create_on_evolution: boolean
 }
 
-const EMPTY: Draft = { label: '', instance: '', base_url: '', api_key: '', note: '' }
+// create_on_evolution liga por padrao: digitar um nome que nao existe la era o
+// erro mais comum, e ele so aparecia como 404 dois cliques depois, no QR.
+const EMPTY: Draft = { label: '', instance: '', base_url: '', api_key: '', note: '', create_on_evolution: true }
 
 function StateBadge({ state }: { state: string | null }) {
   if (!state) return <Badge>estado desconhecido</Badge>
@@ -41,11 +52,29 @@ function InstanceForm({
           base_url: instance.base_url ?? '',
           api_key: '',
           note: instance.note ?? '',
+          create_on_evolution: false,
         }
       : { ...EMPTY, base_url: defaults?.base_url ?? '' },
   )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [found, setFound] = useState<EvoAvailable[] | null>(null)
+  const [looking, setLooking] = useState(false)
+
+  /** Pergunta a Evolution o que existe la. Usa a URL/apikey digitadas, que podem
+   *  ainda nao estar salvas em linha nenhuma — por isso vao por query. */
+  const lookup = async () => {
+    setLooking(true)
+    setErr(null)
+    try {
+      setFound(await evolutionApi.available(draft.base_url.trim(), draft.api_key.trim()))
+    } catch (e) {
+      setErr((e as Error).message)
+      setFound(null)
+    } finally {
+      setLooking(false)
+    }
+  }
 
   const save = async () => {
     setBusy(true)
@@ -57,6 +86,7 @@ function InstanceForm({
         base_url: draft.base_url.trim(),
         api_key: draft.api_key.trim(),
         note: draft.note.trim() || null,
+        ...(instance ? {} : { create_on_evolution: draft.create_on_evolution }),
       }
       if (instance) await evolutionApi.patch(instance.id, payload)
       else await evolutionApi.create(payload)
@@ -109,6 +139,49 @@ function InstanceForm({
           />
         </Field>
       </div>
+
+      {!instance && (
+        <div className="space-y-2 rounded-lg border border-ink-800 bg-ink-850 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" disabled={looking || !draft.base_url.trim()} onClick={lookup}>
+              {looking ? 'consultando…' : 'Ver instâncias na Evolution'}
+            </Button>
+            <span className="text-xs text-ink-400">
+              O nome tem que ser exatamente igual ao da Evolution.
+            </span>
+          </div>
+
+          {found && found.length === 0 && (
+            <p className="text-xs text-ink-400">
+              Nenhuma instância nessa Evolution. Digite um nome e deixe a criação ligada.
+            </p>
+          )}
+
+          {found && found.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {found.map((row) => (
+                <button
+                  key={row.name}
+                  type="button"
+                  title={row.registered ? 'já tem uma linha cadastrada' : 'clique para usar este nome'}
+                  onClick={() => setDraft({ ...draft, instance: row.name, create_on_evolution: false })}
+                  className="flex items-center gap-2 rounded border border-ink-700 px-2 py-1 text-xs hover:border-ink-500"
+                >
+                  <span className={row.registered ? 'text-ink-500' : 'text-ink-200'}>{row.name}</span>
+                  <StateBadge state={row.state} />
+                  {row.registered && <span className="text-ink-500">(já cadastrada)</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <Toggle
+            checked={draft.create_on_evolution}
+            onChange={(v) => setDraft({ ...draft, create_on_evolution: v })}
+            label="Criar a instância na Evolution se ela não existir"
+          />
+        </div>
+      )}
 
       <Field label="Observação (opcional)">
         <Textarea rows={2} value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} />
@@ -217,6 +290,23 @@ function InstanceCard({
             }
           >
             {busy === 'status' ? 'verificando…' : 'Verificar status'}
+          </Button>
+
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() =>
+              act('provision', async () => {
+                const r = await evolutionApi.provision(instance.id)
+                setMsg(
+                  r.created
+                    ? { tone: 'good', text: `Instância “${r.instance}” criada na Evolution. Agora clique em “Conectar (QR)”.` }
+                    : { tone: 'good', text: `A instância “${r.instance}” já existia na Evolution.` },
+                )
+              })
+            }
+          >
+            {busy === 'provision' ? 'criando…' : 'Criar na Evolution'}
           </Button>
 
           <Button
