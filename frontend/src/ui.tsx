@@ -35,6 +35,8 @@ type ButtonProps = {
   disabled?: boolean
   size?: 'sm' | 'md'
   type?: 'button' | 'submit'
+  /** ocupa a linha toda — formulário empilhado, como o login */
+  full?: boolean
 }
 
 export function Button({
@@ -44,9 +46,10 @@ export function Button({
   disabled,
   size = 'md',
   type = 'button',
+  full,
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40'
+    `${full ? 'flex w-full' : 'inline-flex'} items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40`
   const sizes = { sm: 'px-2.5 py-1 text-xs', md: 'px-3.5 py-2 text-sm' }
   const variants = {
     primary: 'bg-wa-500 text-ink-950 hover:bg-wa-600',

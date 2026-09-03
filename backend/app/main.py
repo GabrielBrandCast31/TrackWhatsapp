@@ -9,8 +9,12 @@ Duas superficies:
 
 * tela principal — conectar a instancia da Evolution, informar Pixel + token da
   Conversions API e cadastrar as regras de palavra-chave (com simulador);
-* /api/admin — prospeccao no mapa, CRM, abordagem ativa, Cloud API e destinos
-  extras (Google Ads, webhook generico), tudo atras de login.
+* area de admin — prospeccao no mapa, CRM global, abordagem ativa, Cloud API e
+  destinos extras (Google Ads, webhook generico), so pra perfil admin.
+
+O painel inteiro fica atras de login (JWT; veja app.auth): sem token valido, /api
+responde 401. Publicos so o /api/health, o /api/auth/login e os /webhook/*, que a
+Evolution e a Meta chamam e que se autenticam por conta propria.
 
 A plataforma atende VARIAS linhas ao mesmo tempo: cada linha e uma instancia da
 Evolution com Pixel, token e regras proprios.
@@ -23,10 +27,11 @@ from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
+from app import auth
 from app import numbers as numbers_service
 from app.db import SessionLocal, init_db
 from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect
-from app.routers import admin as admin_router
+from app.routers import auth as auth_router
 from app.routers import config as config_router
 from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
@@ -49,27 +54,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- rastreamento: o que a tela principal usa ---
-app.include_router(admin_router.router)
-app.include_router(evolution_router.router)
-app.include_router(rules_router.router)
-app.include_router(crm_router.router)
-app.include_router(contacts_router.router)
-app.include_router(conversions_router.router)
-app.include_router(webhook_router.router)
-
-# --- legado, atras de login (prospeccao, CRM, Cloud API, destinos extras) ---
 # A protecao mora aqui, no include: qualquer rota nova desses routers ja nasce
-# protegida, sem depender de alguem lembrar de decorar a funcao.
-_admin_only = [Depends(admin_router.require_admin)]
+# fechada, sem depender de alguem lembrar de decorar a funcao.
+_logged_in = [Depends(auth.require_user)]
+_admin_only = [Depends(auth.require_admin)]
+
+# login: as unicas rotas de /api que respondem sem token (o proprio router fecha
+# /me, /password e o cadastro de usuarios)
+app.include_router(auth_router.router)
+
+# --- rastreamento: o que a tela principal usa, pra qualquer usuario logado ---
+app.include_router(evolution_router.router, dependencies=_logged_in)
+app.include_router(rules_router.router, dependencies=_logged_in)
+app.include_router(crm_router.router, dependencies=_logged_in)
+app.include_router(contacts_router.router, dependencies=_logged_in)
+app.include_router(conversions_router.router, dependencies=_logged_in)
+
+# --- so admin (prospeccao, Cloud API, destinos extras) ---
 app.include_router(config_router.router, dependencies=_admin_only)
 app.include_router(numbers_router.router, dependencies=_admin_only)
 app.include_router(prospecting_router.router, dependencies=_admin_only)
+
+# --- publico: quem chama e a Evolution/Meta, autenticando pelo token da URL ou
+# pela assinatura do payload ---
+app.include_router(webhook_router.router)
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     await init_db()
+    async with SessionLocal() as session:
+        # base nova (ou vinda da versao sem login) precisa de alguem pra entrar
+        await auth.ensure_bootstrap_user(session)
     async with SessionLocal() as session:
         # primeira subida em multi-numero: a config antiga vira o numero #1
         await numbers_service.seed_from_global_settings(session)
@@ -88,7 +104,7 @@ async def health():
     return {"ok": True}
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=_logged_in)
 async def stats(number_id: int | None = Query(default=None)):
     """Numeros do topo da tela. Com `number_id`, so daquela linha."""
 

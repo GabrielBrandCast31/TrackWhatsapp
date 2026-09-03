@@ -33,7 +33,9 @@ Um seletor no topo do painel define qual linha você está olhando.
 | **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
 | **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
 | **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |
-| **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API e destinos extras (login) |
+| **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API, destinos extras e usuários (só perfil admin) |
+
+O painel inteiro fica atrás de **login** — veja [Login e usuários](#login-e-usuários).
 
 ## Subir
 
@@ -42,8 +44,31 @@ cp .env.example .env
 docker compose up --build
 ```
 
-- Painel: http://localhost:8030
-- API: http://localhost:8000 (docs em `/docs`)
+- Painel: http://localhost:8030 (abre no login)
+- API: http://localhost:8000 (docs em `/docs`) — publicada só no localhost da máquina
+
+No primeiro acesso, entre com `ADMIN_USER` / `ADMIN_PASSWORD` do `.env`.
+
+### Na VPS
+
+```bash
+cp .env.example .env
+# obrigatórios antes de expor:
+#   JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+#   ADMIN_PASSWORD=<uma senha sua>
+#   PUBLIC_BASE_URL=https://seu.dominio
+docker compose up --build -d
+docker compose logs -f backend      # confere que não sobrou WARNING de senha/segredo padrão
+```
+
+Só a porta `8030` (o nginx do frontend) precisa sair pra internet — ela serve o painel e
+faz proxy de `/api` e `/webhook`. O backend fica em `127.0.0.1:8000`, e o Postgres, só na
+rede interna do compose. Ponha um proxy com TLS (Caddy, Nginx, Traefik) na frente da 8030
+e aponte `PUBLIC_BASE_URL` pro domínio HTTPS — a Evolution precisa alcançar o webhook por
+HTTPS, e o token de login não deve trafegar em texto claro.
+
+Depois de subir: entre no painel, vá em **Admin → Usuários**, crie a conta de cada pessoa
+e troque a senha do admin inicial.
 
 ### Sem docker
 
@@ -227,33 +252,66 @@ No detalhe do lead:
 A aba **Conversões** mostra o log completo, marcando o que veio de palavra-chave, e tem
 retry por destino que falhou.
 
-## Área de admin
+## Login e usuários
 
-Aba **Admin** (usuário e senha em `ADMIN_USER` / `ADMIN_PASSWORD`, padrão
-`gabriel` / `gabriel123`). O que estava na tela principal e saiu de lá continua inteiro
-aqui dentro:
+O painel abre numa tela de login. Sem sessão válida, **todo** `/api` responde 401 — só
+`/api/health`, `/api/auth/login` e os `/webhook/*` respondem sem token (esses últimos se
+autenticam sozinhos, pelo token na URL ou pela assinatura do payload).
+
+**Como funciona.** O login devolve dois JWT assinados em HS256: um *access* curto (1h por
+padrão), que vai em `Authorization: Bearer` a cada chamada, e um *refresh* longo (7 dias),
+que o painel usa sozinho para renovar o access sem pedir a senha de novo. A senha nunca é
+guardada: vai para o banco como PBKDF2-SHA256 com salt por usuário. Todo token carrega
+uma marca da senha atual — **trocar a senha derruba na hora toda sessão emitida antes**,
+inclusive a de quem tivesse copiado o token. Desativar ou apagar alguém também vale na
+hora: o usuário é revalidado no banco a cada requisição, não só quando o token expira.
+
+**Dois perfis:**
+
+| Perfil | Vê |
+|---|---|
+| `operação` | Conexão, Rastreamento, CRM da linha, Leads e Conversões |
+| `admin` | tudo isso mais a aba **Admin** |
+
+A aba **Admin** guarda o que saiu da tela principal, e continua inteiro:
 
 - **Prospecção** — varredura de potenciais clientes no Google Maps por raio (Apify)
 - **CRM** — o funil dos prospects e a abordagem ativa no WhatsApp
 - **Cloud API** — o canal oficial da Meta, para quem já usava a versão anterior
 - **Destinos** — Google Ads (conversões offline) e webhook genérico
 - **Manual** — o passo a passo com checklist de configuração
+- **Usuários** — quem entra no painel: criar, trocar perfil, desativar, redefinir senha
 
-A proteção mora no `include_router` do backend: qualquer rota nova desses módulos já
-nasce exigindo o token de admin. A sessão é um HMAC assinado com validade (12h por
-padrão) e vale enquanto a aba do navegador estiver aberta.
+A proteção mora no `include_router` do backend: qualquer rota nova já nasce fechada, sem
+depender de alguém lembrar de decorar a função. O último administrador ativo não pode ser
+rebaixado, desativado nem apagado — senão ninguém mais entra no cadastro.
 
-⚠️ **Antes de expor na internet, troque a senha.** O padrão `gabriel123` está aqui no
-README, ou seja, é público. Defina no `.env`:
+**Primeiro acesso.** Base sem nenhum usuário ganha um admin com `ADMIN_USER` /
+`ADMIN_PASSWORD` do `.env` (padrão `gabriel` / `gabriel123`). Depois disso o cadastro vive
+no painel, e essas duas variáveis não valem mais nada. Cada um troca a própria senha pelo
+botão **senha** no topo; um admin redefine a de outra pessoa em **Admin → Usuários**.
+
+⚠️ **Antes de expor na internet**, defina no `.env`:
 
 ```bash
+JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 ADMIN_PASSWORD=<uma senha sua>
-ADMIN_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 ```
 
-`ADMIN_SECRET` é a chave que assina o token de sessão — nunca é derivada da senha. Em
-branco, ela é sorteada a cada subida do backend: seguro, mas a sessão cai no restart.
-Com a senha padrão em uso, o backend registra um `WARNING` no log a cada subida.
+`JWT_SECRET` é a chave que assina os tokens. Em branco, é sorteada a cada subida do
+backend: seguro, mas todo mundo cai do login no restart (e o token de um worker não vale
+no outro). Com a senha padrão em uso, o backend registra um `WARNING` no log — o
+`gabriel123` está aqui no README, ou seja, é público.
+
+O login tem trava de força bruta por IP + usuário (`LOGIN_MAX_FAILS`, 8 tentativas em
+`LOGIN_FAIL_WINDOW_SECONDS`, 300s), e responde a mesma mensagem para usuário inexistente,
+senha errada e conta desativada.
+
+Bateria de fumaça do login (SQLite descartável, sem docker e sem rede):
+
+```bash
+cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_auth.py
+```
 
 ### Prospecção ativa (varredura por raio)
 
@@ -328,7 +386,9 @@ rebaixado pelo automático.
 backend/app/
   __init__.py             carrega o .env antes de qualquer submodulo
   main.py                 app, /api/health, /api/stats e o include dos routers
-                          (os módulos de admin entram com a dependência de login)
+                          (é aqui que cada grupo ganha a dependência de login/admin)
+  auth.py                 hash de senha, emissão/validação de JWT e as dependências
+                          require_user / require_admin
   evolution_ingest.py     webhook da Evolution -> lead com atribuição -> regra -> evento
   crm.py                  traz agenda, conversas e histórico da instância pro CRM da linha
   ingest.py               mesmo caminho para o payload da Cloud API (canal legado)
@@ -338,15 +398,15 @@ backend/app/
   settings_store.py       config env + override no banco, com mascaramento de segredo
   numbers.py              resolve a linha em jogo e funde credenciais + overrides no
                           formato de config que o resto do sistema já consumia
-  models.py               wa_numbers, keyword_rules, contacts (é também o card do CRM),
-                          messages, conversions, dispatches, webhook_logs, prospects,
-                          prospect_searches, outreaches
+  models.py               users, wa_numbers, keyword_rules, contacts (é também o card do
+                          CRM), messages, conversions, dispatches, webhook_logs,
+                          prospects, prospect_searches, outreaches
   migrations.py           ALTER TABLE idempotente rodado no startup
   routers/
     evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
     rules.py              regras de palavra-chave + /simulate
     crm.py                conversas da linha: etapa, nota, sync, resposta e disparo
-    admin.py              login e a dependência que protege os módulos escondidos
+    auth.py               login, refresh, troca de senha e cadastro de usuários
     webhook.py            /webhook/evolution (token por linha) e /webhook/whatsapp
     contacts.py           leads e o log cru dos webhooks
     conversions.py        disparo manual, histórico e retry
@@ -363,6 +423,9 @@ backend/app/
     google_ads.py         OAuth + uploadClickConversions
     generic_webhook.py    POST assinado
     dispatch.py           orquestra os destinos e registra cada tentativa
+
+backend/tests/
+  test_auth.py            fumaça do login: 401 sem token, papéis, refresh, troca de senha
 ```
 
 ## Notas

@@ -601,12 +601,9 @@ export default function Crm({ onChanged }: { onChanged: () => void }) {
           subtitle={`${rows.length} listado(s)`}
           actions={
             <>
-              <a
-                href={prospectApi.csvUrl(filters)}
-                className="inline-flex items-center rounded-lg border border-ink-700 bg-ink-850 px-2.5 py-1 text-xs text-ink-300 hover:border-ink-500"
-              >
+              <Button size="sm" onClick={() => void prospectApi.downloadCsv(filters)}>
                 CSV
-              </a>
+              </Button>
               <Button size="sm" onClick={() => void load()}>
                 atualizar
               </Button>

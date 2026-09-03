@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import AccountBar from './AccountBar'
 import { api, type Stats } from './api'
+import { AuthProvider, useAuth } from './authContext'
+import Login from './Login'
 import { NumberProvider, useNumber } from './numberContext'
 import Admin from './tabs/Admin'
 import Conversions from './tabs/Conversions'
@@ -15,7 +18,8 @@ const TABS = [
   { id: 'crm', label: 'CRM' },
   { id: 'leads', label: 'Leads' },
   { id: 'conversions', label: 'Conversões' },
-  { id: 'admin', label: 'Admin' },
+  // só admin: o backend recusa as rotas de dentro dela pra perfil de operação
+  { id: 'admin', label: 'Admin', adminOnly: true },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -72,6 +76,8 @@ function Shell() {
   const [tab, setTab] = useState<TabId>('instances')
   const [stats, setStats] = useState<Stats | null>(null)
   const { numberId } = useNumber()
+  const { isAdmin } = useAuth()
+  const tabs = TABS.filter((t) => isAdmin || !('adminOnly' in t && t.adminOnly))
 
   const refresh = useCallback(() => {
     void api
@@ -97,19 +103,22 @@ function Shell() {
               <NumberPicker />
             </div>
           </div>
-          {stats && (
-            <div className="flex flex-wrap gap-7">
-              <Stat label="Leads" value={stats.contacts} />
-              <Stat label="Com atribuição" value={stats.attributed_contacts} accent />
-              <Stat label="Conversões" value={stats.conversions} />
-              <Stat label="Por palavra-chave" value={stats.rule_conversions ?? 0} accent />
-              <Stat label="Regras" value={stats.rules ?? 0} />
-              <Stat label="Falhas" value={stats.dispatches.error ?? 0} />
-            </div>
-          )}
+          <div className="flex flex-col items-end gap-4">
+            <AccountBar />
+            {stats && (
+              <div className="flex flex-wrap justify-end gap-7">
+                <Stat label="Leads" value={stats.contacts} />
+                <Stat label="Com atribuição" value={stats.attributed_contacts} accent />
+                <Stat label="Conversões" value={stats.conversions} />
+                <Stat label="Por palavra-chave" value={stats.rule_conversions ?? 0} accent />
+                <Stat label="Regras" value={stats.rules ?? 0} />
+                <Stat label="Falhas" value={stats.dispatches.error ?? 0} />
+              </div>
+            )}
+          </div>
         </div>
         <nav className="mx-auto flex max-w-[1400px] gap-1 px-6">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
@@ -131,16 +140,37 @@ function Shell() {
         {tab === 'crm' && <CrmNumber onChanged={refresh} />}
         {tab === 'leads' && <Leads onChanged={refresh} />}
         {tab === 'conversions' && <Conversions onChanged={refresh} />}
-        {tab === 'admin' && <Admin onChanged={refresh} />}
+        {tab === 'admin' && isAdmin && <Admin onChanged={refresh} />}
       </main>
     </div>
   )
 }
 
-export default function App() {
+/** Nada carrega antes do login: as chamadas de dentro do painel só existem
+ *  depois que há um token — senão o primeiro render dispara uma enxurrada de 401. */
+function Gate() {
+  const { user, checking } = useAuth()
+
+  if (checking) {
+    return (
+      <div className="flex min-h-full items-center justify-center">
+        <p className="text-sm text-ink-500">carregando…</p>
+      </div>
+    )
+  }
+  if (!user) return <Login />
+
   return (
     <NumberProvider>
       <Shell />
     </NumberProvider>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
   )
 }

@@ -400,3 +400,28 @@ class Outreach(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     prospect: Mapped["Prospect"] = relationship(back_populates="outreaches")
+
+
+class User(Base):
+    """Quem pode entrar no painel.
+
+    `role` separa dois niveis: `admin` ve tudo (inclusive a area de prospeccao,
+    Cloud API, destinos e o cadastro de usuarios) e `user` fica so na operacao do
+    dia a dia — conexao, rastreamento, CRM da linha, leads e conversoes.
+
+    A senha vive aqui como hash PBKDF2 com salt (veja app.auth); o texto puro
+    nunca e gravado nem logado.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(16), default="user")  # admin | user
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -43,6 +43,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
     },
     # de onde veio o evento: botao, regra de palavra-chave ou primeiro contato
     "conversions": {"source": "VARCHAR(16)", "rule_id": "INTEGER"},
+    # login do painel: base que ja existia ganha a tabela nova pelo create_all
+    "users": {"name": "VARCHAR(120)", "last_login_at": "TIMESTAMP", "password_changed_at": "TIMESTAMP"},
 }
 
 # coluna nova com valor obrigatorio: ALTER TABLE cria com NULL, e o backfill
@@ -53,6 +55,7 @@ _BACKFILL: tuple[tuple[str, str, str], ...] = (
     ("contacts", "stage", "'novo'"),
     ("contacts", "origin", "'webhook'"),
     ("contacts", "unread_count", "0"),
+    ("users", "role", "'user'"),
     # BOOLEAN: o literal precisa ser FALSE, nao 0 — o Postgres recusa o integer
     # (DatatypeMismatchError) e o SQLite aceita FALSE desde a 3.23.
     ("contacts", "last_message_from_me", "FALSE"),

@@ -21,8 +21,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # so o localhost da maquina: na VPS quem fala com o mundo e o nginx do
+    # frontend, que ja faz proxy de /api e /webhook. A API tambem exige login,
+    # mas nao ha motivo pra ter duas portas abertas.
     ports:
-      - '8000:8000'
+      - '127.0.0.1:8000:8000'
     healthcheck:
       test: ['CMD', 'curl', '-fsS', 'http://localhost:8000/api/health']
       interval: 10s

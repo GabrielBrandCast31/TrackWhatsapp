@@ -2,44 +2,120 @@ const BASE = import.meta.env.VITE_API_URL ?? ''
 
 export class ApiError extends Error {}
 
-/** 401 numa rota de admin: a sessão caiu e a tela precisa pedir login de novo. */
+/** 401: o JWT caiu (expirou, senha mudou, conta desativada). A tela volta pro login. */
 export class UnauthorizedError extends ApiError {}
 
-const ADMIN_KEY = 'wa.adminToken'
+/** 403: logado, mas sem perfil de admin pra essa rota. */
+export class ForbiddenError extends ApiError {}
 
-export const adminToken = {
-  get(): string | null {
-    try {
-      return sessionStorage.getItem(ADMIN_KEY)
-    } catch {
-      return null
-    }
+const ACCESS_KEY = 'wa.accessToken'
+const REFRESH_KEY = 'wa.refreshToken'
+
+export type AuthUser = {
+  id: number
+  username: string
+  name: string | null
+  role: 'admin' | 'user'
+  active: boolean
+  created_at: string
+  last_login_at: string | null
+}
+
+export type TokenPair = {
+  access_token: string
+  refresh_token: string
+  token_type: string
+  expires_in: number
+  user: AuthUser
+}
+
+/** Sessao no localStorage: fechar a aba nao desloga, mas o token expira sozinho. */
+export const session = {
+  access: (): string | null => read(ACCESS_KEY),
+  refresh: (): string | null => read(REFRESH_KEY),
+  save(pair: Pick<TokenPair, 'access_token' | 'refresh_token'>) {
+    write(ACCESS_KEY, pair.access_token)
+    write(REFRESH_KEY, pair.refresh_token)
   },
-  set(token: string | null) {
-    try {
-      if (token) sessionStorage.setItem(ADMIN_KEY, token)
-      else sessionStorage.removeItem(ADMIN_KEY)
-    } catch {
-      // navegador sem storage: a sessão de admin vale só enquanto a aba estiver aberta
-    }
+  clear() {
+    write(ACCESS_KEY, null)
+    write(REFRESH_KEY, null)
   },
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response
-  const token = adminToken.get()
+function read(key: string): string | null {
   try {
-    res = await fetch(`${BASE}${path}`, {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function write(key: string, value: string | null) {
+  try {
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
+  } catch {
+    // navegador sem storage: a sessao vive so nesta pagina
+  }
+}
+
+/** Avisa a aplicacao que a sessao morreu, de qualquer lugar do codigo. */
+let onLogout: (() => void) | null = null
+export function setLogoutHandler(fn: (() => void) | null) {
+  onLogout = fn
+}
+
+/** Renova o access com o refresh. Uma renovacao por vez: varias chamadas em
+ *  paralelo pegando 401 juntas esperam a mesma promessa. */
+let renewing: Promise<boolean> | null = null
+
+async function renew(): Promise<boolean> {
+  const refresh_token = session.refresh()
+  if (!refresh_token) return false
+  renewing ??= (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token }),
+      })
+      if (!res.ok) return false
+      session.save((await res.json()) as TokenPair)
+      return true
+    } catch {
+      return false
+    } finally {
+      renewing = null
+    }
+  })()
+  return renewing
+}
+
+async function send(path: string, init?: RequestInit): Promise<Response> {
+  const token = session.access()
+  try {
+    return await fetch(`${BASE}${path}`, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'X-Admin-Token': token } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init?.headers ?? {}),
       },
     })
   } catch {
     // fetch só rejeita quando a requisição nem sai: backend fora do ar, DNS, CORS
     throw new ApiError(`Não consegui falar com a API (${path}). O backend está no ar?`)
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res = await send(path, init)
+
+  // access expirado: troca pelo refresh e repete uma vez, sem o usuário ver.
+  // /api/auth/* fica de fora — 401 ali é senha errada, não sessão vencida.
+  if (res.status === 401 && !path.startsWith('/api/auth/') && (await renew())) {
+    res = await send(path, init)
   }
 
   const text = await res.text()
@@ -58,7 +134,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // "Not Found" cru é o 404 do FastAPI para rota inexistente — quase sempre
     // container servindo código antigo. Um 404 dos nossos handlers vem com texto
     // próprio ("Prospect nao encontrado") e passa direto.
-    if (res.status === 401) throw new UnauthorizedError(detail)
+    if (res.status === 401) {
+      if (!path.startsWith('/api/auth/')) {
+        session.clear()
+        onLogout?.()
+      }
+      throw new UnauthorizedError(detail)
+    }
+    if (res.status === 403) throw new ForbiddenError(detail)
 
     if (res.status === 404 && detail === 'Not Found') {
       throw new ApiError(
@@ -69,6 +152,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(detail)
   }
   return body as T
+}
+
+/** Download de arquivo (CSV) numa rota autenticada: `<a href>` não manda o
+ *  Bearer, então busca com token e entrega o blob pro navegador. */
+export async function download(path: string, filename: string): Promise<void> {
+  let res = await send(path)
+  if (res.status === 401 && (await renew())) res = await send(path)
+  if (!res.ok) {
+    if (res.status === 401) {
+      session.clear()
+      onLogout?.()
+    }
+    throw new ApiError(`Não consegui baixar o arquivo (HTTP ${res.status}).`)
+  }
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export type Attribution = {
@@ -377,8 +482,8 @@ export const prospectApi = {
     request<{ pending: number }>(`/api/prospect/outreach/drain${qs({ number_id: numberId })}`, {
       method: 'POST',
     }),
-  csvUrl: (filters: ProspectFilters = {}) =>
-    `${BASE}/api/prospect/prospects.csv${qs(filters as Record<string, unknown>)}`,
+  downloadCsv: (filters: ProspectFilters = {}) =>
+    download(`/api/prospect/prospects.csv${qs(filters as Record<string, unknown>)}`, 'prospects.csv'),
 }
 
 export const numbersApi = {
@@ -668,15 +773,26 @@ export const rulesApi = {
     request<SimulationResult>('/api/rules/simulate', { method: 'POST', body: JSON.stringify(payload) }),
 }
 
-// --- área de admin ---
+// --- login e usuários ---
 
-export const adminApi = {
+export const authApi = {
   login: (username: string, password: string) =>
-    request<{ token: string; expires_at: number; user: string }>('/api/admin/login', {
+    request<TokenPair>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
-  session: () => request<{ user: string; ok: boolean }>('/api/admin/session'),
+  me: () => request<AuthUser>('/api/auth/me'),
+  changePassword: (current_password: string, new_password: string) =>
+    request<TokenPair>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+  users: () => request<AuthUser[]>('/api/auth/users'),
+  createUser: (payload: { username: string; password: string; name?: string; role: string }) =>
+    request<AuthUser>('/api/auth/users', { method: 'POST', body: JSON.stringify(payload) }),
+  patchUser: (id: number, patch: Record<string, unknown>) =>
+    request<AuthUser>(`/api/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteUser: (id: number) => request<void>(`/api/auth/users/${id}`, { method: 'DELETE' }),
 }
 
 export const api = {
