@@ -327,7 +327,7 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
             >
               <P>
                 A Meta se recusa a entregar webhook em <C>localhost</C>. Em desenvolvimento, rode{' '}
-                <C>ngrok http 8030</C> e coloque o host gerado em <C>PUBLIC_BASE_URL</C> no <C>.env</C>. Reinicie o
+                <C>ngrok http 3030</C> e coloque o host gerado em <C>PUBLIC_BASE_URL</C> no <C>.env</C>. Reinicie o
                 backend depois de mudar.
               </P>
               <div className="flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-950 px-3 py-2">
