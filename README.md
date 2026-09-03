@@ -44,7 +44,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-- Painel: http://localhost:3030 (abre no login)
+- Painel: http://localhost:3031 (abre no login)
 - API: http://localhost:8040 (docs em `/docs`) — publicada só no localhost da máquina
 
 No primeiro acesso, entre com `ADMIN_USER` / `ADMIN_PASSWORD` do `.env`.
@@ -61,9 +61,9 @@ docker compose up --build -d
 docker compose logs -f backend      # confere que não sobrou WARNING de senha/segredo padrão
 ```
 
-Só a porta `3030` (o nginx do frontend) precisa sair pra internet — ela serve o painel e
+Só a porta `3031` (o nginx do frontend) precisa sair pra internet — ela serve o painel e
 faz proxy de `/api` e `/webhook`. O backend fica em `127.0.0.1:8040`, e o Postgres, só na
-rede interna do compose. Ponha um proxy com TLS (Caddy, Nginx, Traefik) na frente da 3030
+rede interna do compose. Ponha um proxy com TLS (Caddy, Nginx, Traefik) na frente da 3031
 e aponte `PUBLIC_BASE_URL` pro domínio HTTPS — a Evolution precisa alcançar o webhook por
 HTTPS, e o token de login não deve trafegar em texto claro.
 
@@ -86,7 +86,7 @@ cd frontend && npm install && npm run dev
 A Evolution precisa alcançar esta aplicação por HTTPS público. Em dev:
 
 ```bash
-ngrok http 3030          # o frontend faz proxy de /webhook e /api pro backend
+ngrok http 3031          # o frontend faz proxy de /webhook e /api pro backend
 ```
 
 Ponha o host do ngrok em `PUBLIC_BASE_URL` no `.env` e reinicie o backend.

@@ -23,7 +23,7 @@ from app.services.dispatch import enabled_destinations
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/evolution", tags=["evolution"])
 
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:3030")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:3031")
 
 # campos do destino Meta que a linha guarda em `overrides`
 META_FIELDS = ("meta_dataset_id", "meta_capi_token", "meta_test_event_code")
