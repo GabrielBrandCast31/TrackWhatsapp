@@ -25,7 +25,12 @@ services:
     # frontend, que ja faz proxy de /api e /webhook. A API tambem exige login,
     # mas nao ha motivo pra ter duas portas abertas.
     ports:
-      - '127.0.0.1:8000:8000'
+      - '127.0.0.1:8040:8000'
+    # no Docker do Linux (VPS) 'host.docker.internal' nao resolve sozinho como
+    # no Docker Desktop. Isso mapeia o nome pro gateway do host, pra que a URL
+    # da Evolution possa apontar pra um servico que roda fora do compose.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     healthcheck:
       test: ['CMD', 'curl', '-fsS', 'http://localhost:8000/api/health']
       interval: 10s

@@ -45,7 +45,7 @@ docker compose up --build
 ```
 
 - Painel: http://localhost:8030 (abre no login)
-- API: http://localhost:8000 (docs em `/docs`) — publicada só no localhost da máquina
+- API: http://localhost:8040 (docs em `/docs`) — publicada só no localhost da máquina
 
 No primeiro acesso, entre com `ADMIN_USER` / `ADMIN_PASSWORD` do `.env`.
 
@@ -62,7 +62,7 @@ docker compose logs -f backend      # confere que não sobrou WARNING de senha/s
 ```
 
 Só a porta `8030` (o nginx do frontend) precisa sair pra internet — ela serve o painel e
-faz proxy de `/api` e `/webhook`. O backend fica em `127.0.0.1:8000`, e o Postgres, só na
+faz proxy de `/api` e `/webhook`. O backend fica em `127.0.0.1:8040`, e o Postgres, só na
 rede interna do compose. Ponha um proxy com TLS (Caddy, Nginx, Traefik) na frente da 8030
 e aponte `PUBLIC_BASE_URL` pro domínio HTTPS — a Evolution precisa alcançar o webhook por
 HTTPS, e o token de login não deve trafegar em texto claro.
@@ -75,7 +75,7 @@ e troque a senha do admin inicial.
 ```bash
 # backend (precisa de Python 3.11+ — o código usa `str | None` em anotações avaliadas em runtime)
 cd backend && python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --reload --port 8000
+.venv/bin/uvicorn app.main:app --reload --port 8040
 
 # frontend
 cd frontend && npm install && npm run dev
