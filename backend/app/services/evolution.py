@@ -64,17 +64,24 @@ def _unwrap(resp: httpx.Response) -> Any:
         body = resp.json()
     except ValueError:
         body = {"raw": resp.text[:2000]}
-        # HTML com 200 nao e a Evolution respondendo: e um servidor qualquer no
-        # endereco configurado. O caso comum e apontar evo_base_url pra esta
-        # propria app — o fallback de SPA do nginx devolve index.html em qualquer
+        # HTML nao e a Evolution respondendo: e um servidor qualquer no endereco
+        # configurado. O caso comum e apontar evo_base_url pra outra app da mesma
+        # maquina — o fallback de SPA do nginx devolve index.html em qualquer
         # caminho, e sem este aviso o erro reaparece la na frente como "faltou o
         # QR", culpando a Evolution por um endereco errado.
-        if resp.status_code < 400 and "html" in resp.headers.get("content-type", "").lower():
+        #
+        # Vale para QUALQUER status, nao so 2xx: uma app com router proprio
+        # responde 404 + HTML nos caminhos que nao conhece. Enquanto isso aqui
+        # exigia status < 400, esse caso caia no "HTTP {status}" la embaixo e
+        # despejava 2000 caracteres de markup na tela do usuario no lugar da
+        # explicacao.
+        if "html" in resp.headers.get("content-type", "").lower():
             raise EvolutionError(
-                f"{resp.url} respondeu uma pagina HTML, nao a API da Evolution. "
-                "Confira a URL da Evolution API nesta linha — ela deve apontar pro "
-                "servidor da Evolution, nao pra esta aplicacao (essa URL vai no "
-                "PUBLIC_BASE_URL)."
+                f"{resp.url} respondeu HTTP {resp.status_code} com uma pagina HTML, "
+                "nao a API da Evolution. Confira a URL da Evolution API nesta linha "
+                "— ela deve apontar pro servidor da Evolution, nao pra esta "
+                "aplicacao nem pra outra app da mesma maquina (a URL desta app vai "
+                "no PUBLIC_BASE_URL)."
             )
 
     if resp.status_code >= 400:
