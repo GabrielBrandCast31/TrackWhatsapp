@@ -29,8 +29,20 @@ services:
     # no Docker do Linux (VPS) 'host.docker.internal' nao resolve sozinho como
     # no Docker Desktop. Isso mapeia o nome pro gateway do host, pra que a URL
     # da Evolution possa apontar pra um servico que roda fora do compose.
+    # Continua aqui como escape hatch pra apontar pra uma Evolution que rode
+    # fora do Docker; o caminho normal agora e a rede evolution-net abaixo.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+    # A Evolution vive no compose dela (Teste/evolution). Entrar na rede dela
+    # deixa o backend chamar 'http://evolution-api:8080' por DNS interno do
+    # Docker, em vez de sair pelo host: some a dependencia de porta publicada,
+    # de firewall entre bridge e host, e de a Evolution ter de escutar em
+    # 0.0.0.0 — que era o que expunha o controle das sessoes na internet.
+    # 'default' precisa estar listado: declarar networks tira o servico da rede
+    # padrao, e sem ela o backend perde o db e o frontend perde o backend.
+    networks:
+      - default
+      - evolution-net
     healthcheck:
       test: ['CMD', 'curl', '-fsS', 'http://localhost:8000/api/health']
       interval: 10s
@@ -43,6 +55,13 @@ services:
       - backend
     ports:
       - '3031:80'
+
+networks:
+  # criada pelo compose da Evolution (Teste/evolution/docker-compose.yml).
+  # 'external' = este compose nao cria nem apaga: suba a Evolution primeiro,
+  # senao o 'docker compose up' daqui falha dizendo que a rede nao existe.
+  evolution-net:
+    external: true
 
 volumes:
   pgdata:
