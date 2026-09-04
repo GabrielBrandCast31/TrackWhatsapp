@@ -9,6 +9,11 @@
 #   EVO_DIR=/caminho/evolution   pasta do compose da Evolution (padrao: ../evolution)
 #   EVO_HOST_PORT=8083           porta do HOST so pro painel /manager
 #   PUBLIC_IP=1.2.3.4            IP publico, se a deteccao automatica falhar
+#   PUBLIC_URL=https://dominio   endereco publico do painel (padrao: http://IP:3031).
+#                                Use quando houver dominio + nginx do host na frente;
+#                                sem isto o script grava http://IP:3031 e a tela de
+#                                Conexao passa a mostrar uma URL de webhook http://,
+#                                que a Evolution recusa.
 #
 # Na sua maquina de dev vale o mesmo script, so trocando o endereco publico:
 #   PUBLIC_IP=localhost bash deploy-vps.sh
@@ -77,6 +82,11 @@ IP="${PUBLIC_IP:-$(curl -s --max-time 8 ifconfig.me || true)}"
 [ -n "$IP" ] || err "nao consegui descobrir o IP. Passe manualmente: PUBLIC_IP=1.2.3.4 bash deploy-vps.sh"
 info "IP desta maquina: $IP"
 
+# Com dominio + nginx do host na frente, quem responde ao mundo e o nginx em
+# https://dominio — nao a 3031 direto. PUBLIC_URL cobre esse caso.
+PUBLIC_URL="${PUBLIC_URL:-http://${IP}:3031}"
+info "URL publica do painel: $PUBLIC_URL"
+
 # Estes tres sao os unicos valores que diferem entre a sua maquina e a VPS.
 set_kv() { # arquivo chave valor
   local f="$1" k="$2" v="$3"
@@ -88,7 +98,7 @@ set_kv() { # arquivo chave valor
     echo "  ${k}=${v}"
   fi
 }
-set_kv "$TRACK_DIR/.env" PUBLIC_BASE_URL     "http://${IP}:3031"
+set_kv "$TRACK_DIR/.env" PUBLIC_BASE_URL     "$PUBLIC_URL"
 set_kv "$TRACK_DIR/.env" EVOLUTION_BASE_URL  "$EVO_INTERNAL_URL"
 set_kv "$EVO_DIR/.env"   SERVER_URL          "http://${IP}:${EVO_HOST_PORT}"
 ok ".env ajustados."
@@ -182,7 +192,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
 
   echo
   ok "Pronto."
-  echo "  Painel do tracker : http://${IP}:3031"
+  echo "  Painel do tracker : ${PUBLIC_URL}"
   echo "  Painel da Evolution: http://127.0.0.1:${EVO_HOST_PORT}/manager"
   echo "                       (so localhost — use: ssh -L ${EVO_HOST_PORT}:127.0.0.1:${EVO_HOST_PORT} usuario@${IP})"
   echo
