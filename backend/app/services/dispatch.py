@@ -38,6 +38,8 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion) -> dict:
         event_id=conv.event_id,
         ctwa_clid=contact.ctwa_clid,
         phone=contact.phone_e164 or to_e164(contact.wa_id),
+        # so a linha Cloud API tem WABA; linha da Evolution deixa o campo de fora
+        waba_id=cfg.get("wa_business_account_id"),
         value=conv.value,
         currency=conv.currency,
         event_time=int(conv.created_at.timestamp()),

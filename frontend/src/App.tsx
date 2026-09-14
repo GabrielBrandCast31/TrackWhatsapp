@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './authContext'
 import Login from './Login'
 import { NumberProvider, useNumber } from './numberContext'
 import Admin from './tabs/Admin'
+import Attribution from './tabs/Attribution'
 import Conversions from './tabs/Conversions'
 import CrmNumber from './tabs/CrmNumber'
 import Instances from './tabs/Instances'
@@ -15,6 +16,7 @@ import Tracking from './tabs/Tracking'
 const TABS = [
   { id: 'instances', label: 'Conexão' },
   { id: 'tracking', label: 'Rastreamento' },
+  { id: 'attribution', label: 'Atribuição' },
   { id: 'crm', label: 'CRM' },
   { id: 'leads', label: 'Leads' },
   { id: 'conversions', label: 'Conversões' },
@@ -137,6 +139,7 @@ function Shell() {
       <main className="mx-auto max-w-[1400px] px-6 py-6">
         {tab === 'instances' && <Instances onChanged={refresh} />}
         {tab === 'tracking' && <Tracking onChanged={refresh} />}
+        {tab === 'attribution' && <Attribution />}
         {tab === 'crm' && <CrmNumber onChanged={refresh} />}
         {tab === 'leads' && <Leads onChanged={refresh} />}
         {tab === 'conversions' && <Conversions onChanged={refresh} />}

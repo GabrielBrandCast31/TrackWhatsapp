@@ -30,6 +30,7 @@ Um seletor no topo do painel define qual linha você está olhando.
 |---|---|
 | **Conexão** | cadastra a instância (URL, apikey, nome), pareia por QR e grava o webhook |
 | **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
+| **Atribuição** | por que a conversa ainda não vira campanha, o diagnóstico da base e o passo a passo pela Cloud API |
 | **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
 | **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
 | **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |

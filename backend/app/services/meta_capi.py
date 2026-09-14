@@ -5,9 +5,13 @@ Para conversa vinda de Click to WhatsApp o evento tem uma forma especifica:
   action_source     = "business_messaging"
   messaging_channel = "whatsapp"
   user_data.ctwa_clid = <clid que veio no referral do webhook>   # NAO hasheado
+  user_data.whatsapp_business_account_id = <waba_id da linha>
 
-O ctwa_clid e o que amarra a conversa de volta ao anuncio. Telefone e email,
-quando presentes, vao hasheados em SHA-256 (normalizados antes).
+O ctwa_clid e o que amarra a conversa de volta ao anuncio. O waba_id diz a qual
+conta do WhatsApp Business aquele clique pertence — a Meta pede os dois juntos
+no evento de Click to WhatsApp, e o dataset de destino tem que ser o da propria
+WABA (`POST /{WABA_ID}/dataset`), nao um pixel de site. Telefone e email, quando
+presentes, vao hasheados em SHA-256 (normalizados antes).
 """
 
 import hashlib
@@ -47,6 +51,7 @@ def build_payload(
     event_id: str,
     ctwa_clid: str | None,
     phone: str | None,
+    waba_id: str | None = None,
     email: str | None = None,
     value: float | None = None,
     currency: str = "BRL",
@@ -57,6 +62,8 @@ def build_payload(
     user_data: dict = {}
     if ctwa_clid:
         user_data["ctwa_clid"] = ctwa_clid
+    if waba_id:
+        user_data["whatsapp_business_account_id"] = str(waba_id)
     hashed_phone = hash_phone(phone)
     if hashed_phone:
         user_data["ph"] = [hashed_phone]
