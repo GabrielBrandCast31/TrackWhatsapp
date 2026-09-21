@@ -527,6 +527,8 @@ export const CRM_STAGE_LABEL: Record<CrmStage, string> = {
 export type CrmContact = {
   id: number
   wa_id: string
+  /** identificador LID; igual ao wa_id quando o telefone da pessoa é desconhecido */
+  wa_lid?: string | null
   wa_number_id: number | null
   phone_e164: string | null
   name: string | null
@@ -629,6 +631,8 @@ export type EvoInstance = {
   note: string | null
   created_at: string
   webhook_url: string
+  /** a mesma rota pelo endereço público — só difere quando a entrega vai por rede interna */
+  webhook_public_url?: string
   api_key__set: boolean
   api_key__hint: string
   meta_dataset_id: string
@@ -648,6 +652,7 @@ export type EvoStatus = {
   profile_name?: string | null
   errors: string[]
   webhook_url: string
+  webhook_public_url?: string
   webhook_configured?: string | null
   webhook_matches?: boolean
   webhook_error?: string
@@ -673,6 +678,7 @@ export type EvoDefaults = {
   base_url: string
   api_key__set: boolean
   webhook_base: string
+  webhook_callback_base?: string
   events: { name: string; label: string; accepts_value: boolean }[]
   webhook_events: string[]
 }

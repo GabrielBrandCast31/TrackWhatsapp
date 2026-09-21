@@ -40,6 +40,7 @@ def serialize(contact: Contact, conversions: int = 0) -> dict:
     return {
         "id": contact.id,
         "wa_id": contact.wa_id,
+        "wa_lid": contact.wa_lid,
         "wa_number_id": contact.wa_number_id,
         "phone_e164": contact.phone_e164,
         "name": contact.name,
@@ -335,8 +336,12 @@ async def reply(contact_id: int, payload: ReplyIn, session: AsyncSession = Depen
     if number.channel != "evolution":
         raise HTTPException(status_code=400, detail="Resposta pelo CRM só em linha na Evolution API.")
 
+    # Conversa que so se identifica por LID: o destino tem de ser o jid do LID.
+    # O `wa_id` dela nao e telefone, e a Evolution nao teria pra quem mandar.
+    to = f"{contact.wa_lid}@lid" if contact.wa_lid and contact.wa_id == contact.wa_lid else contact.wa_id
+
     try:
-        body = await evolution.send_text(await _cfg(session, number), contact.wa_id, payload.text)
+        body = await evolution.send_text(await _cfg(session, number), to, payload.text)
     except evolution.EvolutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"sent": True, "response": body}

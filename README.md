@@ -84,13 +84,30 @@ cd frontend && npm install && npm run dev
 
 ## Conectar a Evolution API
 
-A Evolution precisa alcançar esta aplicação por HTTPS público. Em dev:
+A Evolution precisa alcançar esta aplicação — mas **não necessariamente pela internet**.
+
+Com a Evolution no mesmo Docker (é o caso do `docker-compose.yml` daqui, que entra na rede
+`evolution-net`), a entrega vai pelo endereço interno e pronto:
+
+```bash
+EVOLUTION_CALLBACK_BASE_URL=http://backend:8000   # já vem assim no .env.example
+```
+
+Esse é o caminho recomendado, inclusive em produção: não depende de DNS, de TLS, de proxy
+nem de túnel. `PUBLIC_BASE_URL` continua existindo para o que é público de verdade (o link
+que o painel mostra e a Cloud API da Meta, que só entrega em HTTPS).
+
+Só use um túnel quando a Evolution rodar **fora** desta máquina:
 
 ```bash
 ngrok http 3031          # o frontend faz proxy de /webhook e /api pro backend
 ```
 
-Ponha o host do ngrok em `PUBLIC_BASE_URL` no `.env` e reinicie o backend.
+Aí deixe `EVOLUTION_CALLBACK_BASE_URL` vazio e ponha o host do ngrok em `PUBLIC_BASE_URL`.
+Atenção: túnel que cai leva o rastreio junto, e o sintoma é mudo — a Evolution acumula erro
+de entrega do lado dela e aqui simplesmente não chega mensagem nova. A aba **Conexão** mostra
+os últimos webhooks recebidos justamente pra esse diagnóstico; vazio ali com a linha conectada
+significa que a entrega não está chegando.
 
 Aba **Conexão** → *Adicionar linha*:
 

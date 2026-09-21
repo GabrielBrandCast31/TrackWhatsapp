@@ -115,6 +115,16 @@ async def _request(cfg: dict, method: str, path: str, **kwargs) -> Any:
         # ConnectError/timeout costumam vir com str() vazia — sem o nome da classe
         # a tela mostraria "erro:" e nada mais.
         detail = str(exc) or type(exc).__name__
+        # Nome que nao resolve nao e "Evolution fora do ar", e endereco errado: o
+        # erro cru ("Name or service not known") nao diz isso pra quem le a tela.
+        if "name or service not known" in detail.lower() or "nodename nor servname" in detail.lower():
+            host = url.split("//", 1)[-1].split("/", 1)[0]
+            raise EvolutionError(
+                f"O endereco '{host}' nao existe na rede deste container. A Evolution "
+                "esta em outro lugar: dentro do Docker, use o nome do container dela "
+                "(ex.: http://evolution_api:8080); fora, use IP ou dominio alcancavel. "
+                "O padrao vem do EVOLUTION_BASE_URL, e cada linha pode ter o seu."
+            ) from exc
         raise EvolutionError(f"Nao consegui falar com a Evolution API em {url}: {detail}") from exc
     return _unwrap(resp)
 

@@ -15,6 +15,8 @@ log = logging.getLogger(__name__)
 _COLUMNS: dict[str, dict[str, str]] = {
     "contacts": {
         "wa_number_id": "INTEGER",
+        # enderecamento por LID do WhatsApp
+        "wa_lid": "VARCHAR(32)",
         # CRM por linha
         "stage": "VARCHAR(16)",
         "stage_changed_at": "TIMESTAMP",

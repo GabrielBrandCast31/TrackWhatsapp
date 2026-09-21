@@ -12,6 +12,7 @@ sao escopados pelo numero — a mesma pessoa falando com duas linhas vira dois
 leads, cada um com a atribuicao da campanha daquela linha.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -20,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import numbers, phones
 from app.models import Contact, Message, Prospect, WaNumber, WebhookLog
 from app.tracking import extract, to_e164
+
+log = logging.getLogger(__name__)
 
 _ATTRIBUTION_FIELDS = (
     "ctwa_clid",
@@ -67,20 +70,50 @@ async def upsert_contact(
     attribution: dict,
     phone_number_id: str | None,
     wa_number_id: int | None,
+    lid: str | None = None,
 ) -> tuple[Contact, bool]:
-    stmt = select(Contact).where(Contact.wa_id == wa_id)
-    if wa_number_id is not None:
+    """Contato da conversa, criando se nao existir.
+
+    `lid` e o identificador LID do WhatsApp, quando a conversa chega por ele. Se
+    `wa_id` for igual ao `lid`, o telefone dessa pessoa ainda e desconhecido.
+    """
+    def _scoped(stmt):
+        if wa_number_id is None:
+            return stmt
         # contato ainda sem dono (base pre-multinumero) e adotado pela linha que o atendeu
-        stmt = stmt.where(Contact.wa_number_id.is_(None) | (Contact.wa_number_id == wa_number_id))
-    result = await session.execute(stmt.order_by(Contact.wa_number_id.is_(None), Contact.id))
-    contact = result.scalars().first()
+        return stmt.where(Contact.wa_number_id.is_(None) | (Contact.wa_number_id == wa_number_id))
+
+    order = (Contact.wa_number_id.is_(None), Contact.id)
+    stmt = _scoped(select(Contact).where(Contact.wa_id == wa_id))
+    contact = (await session.execute(stmt.order_by(*order))).scalars().first()
+
+    if contact is None and lid and lid != wa_id:
+        # o telefone apareceu numa conversa que ate agora so tinha LID: promove o
+        # registro existente em vez de criar um segundo contato pra mesma pessoa.
+        by_lid = _scoped(select(Contact).where(Contact.wa_lid == lid))
+        contact = (await session.execute(by_lid.order_by(*order))).scalars().first()
+        if contact is not None:
+            log.info("contato %s: LID %s resolvido para o telefone %s", contact.id, lid, wa_id)
+            contact.wa_id = wa_id
+            contact.phone_e164 = to_e164(wa_id)
+
     created = contact is None
 
     if contact is None:
-        contact = Contact(wa_id=wa_id, phone_e164=to_e164(wa_id), utm={}, wa_number_id=wa_number_id)
+        contact = Contact(
+            wa_id=wa_id,
+            # LID nao e telefone: inventar um E.164 aqui mandaria hash de numero
+            # falso pro Meta na hora da conversao.
+            phone_e164=None if (lid and wa_id == lid) else to_e164(wa_id),
+            utm={},
+            wa_number_id=wa_number_id,
+        )
         session.add(contact)
     elif contact.wa_number_id is None and wa_number_id is not None:
         contact.wa_number_id = wa_number_id
+
+    if lid and not contact.wa_lid:
+        contact.wa_lid = lid
 
     if name and not contact.name:
         contact.name = name

@@ -24,7 +24,7 @@
 # depois :8083). Na VPS a 8080 e do dashboard-meta-gateway, entao o /instance/create
 # caia no frontend daquele projeto, que respondia 404 com uma pagina HTML. Aqui a
 # chamada passa a ser container->container pela rede evolution-net, em
-# http://evolution-api:8080 — essa 8080 e a de DENTRO do container da Evolution,
+# http://evolution_api:8080 — essa 8080 e a de DENTRO do container da Evolution,
 # nao encosta na 8080 do host.
 #
 # E corrige o banco: a URL tambem mora em settings/wa_numbers (settings_store.py:
@@ -33,7 +33,11 @@
 
 set -euo pipefail
 
-EVO_INTERNAL_URL="http://evolution-api:8080"
+# `evolution_api` e o container_name da Evolution: o Docker sempre o resolve na
+# rede, com ou sem alias declarado no compose dela. Um alias extra pode nao
+# existir num container que subiu antes de ele ser adicionado — foi assim que
+# "Name or service not known" apareceu na hora de cadastrar linha.
+EVO_INTERNAL_URL="http://evolution_api:8080"
 TRACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EVO_DIR="${EVO_DIR:-$(cd "$TRACK_DIR/.." && pwd)/evolution}"
 EVO_HOST_PORT="${EVO_HOST_PORT:-8083}"
@@ -98,8 +102,26 @@ set_kv() { # arquivo chave valor
     echo "  ${k}=${v}"
   fi
 }
+# Igual ao set_kv, mas cria a chave se ela nao existir: vale pras chaves novas,
+# que nao estao no .env de quem ja tinha a aplicacao rodando antes delas.
+set_or_add_kv() { # arquivo chave valor
+  local f="$1" k="$2" v="$3"
+  if grep -q "^${k}=" "$f"; then
+    set_kv "$f" "$k" "$v"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    echo "  (dry-run) ${f}: + ${k}=${v}"
+  else
+    printf '\n%s=%s\n' "$k" "$v" >> "$f"
+    echo "  + ${k}=${v}"
+  fi
+}
+
 set_kv "$TRACK_DIR/.env" PUBLIC_BASE_URL     "$PUBLIC_URL"
 set_kv "$TRACK_DIR/.env" EVOLUTION_BASE_URL  "$EVO_INTERNAL_URL"
+# A Evolution chama o backend pela rede interna do Docker. Sem isso, a entrega do
+# webhook passaria pelo dominio publico e ficaria refem de DNS, TLS e proxy — e
+# uma URL publica que para de responder derruba o rastreio inteiro em silencio.
+set_or_add_kv "$TRACK_DIR/.env" EVOLUTION_CALLBACK_BASE_URL "http://backend:8000"
 set_kv "$EVO_DIR/.env"   SERVER_URL          "http://${IP}:${EVO_HOST_PORT}"
 ok ".env ajustados."
 

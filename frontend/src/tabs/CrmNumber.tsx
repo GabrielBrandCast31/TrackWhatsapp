@@ -53,8 +53,19 @@ function shortTime(iso: string | null) {
     : date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
 }
 
+/** Conversa que só se identifica pelo LID do WhatsApp: o `wa_id` dela é o LID,
+ *  não um telefone. Mostrar aquele número cru faria passar por telefone o que
+ *  não é — e alguém acabaria tentando discar. */
+function semTelefone(c: { wa_id: string; wa_lid?: string | null }) {
+  return !!c.wa_lid && c.wa_lid === c.wa_id
+}
+
 function who(c: CrmContact) {
-  return c.name ?? c.phone_e164 ?? c.wa_id
+  return c.name ?? c.phone_e164 ?? (semTelefone(c) ? 'Contato sem telefone' : c.wa_id)
+}
+
+function phoneLabel(c: { wa_id: string; wa_lid?: string | null; phone_e164: string | null }) {
+  return c.phone_e164 ?? (semTelefone(c) ? 'sem telefone' : c.wa_id)
 }
 
 function Avatar({ c, size = 36 }: { c: CrmContact; size?: number }) {
@@ -253,7 +264,7 @@ function ContactPanel({
           <Avatar c={detail} size={44} />
           <div>
             <p className="text-sm font-semibold text-ink-100">{who(detail)}</p>
-            <p className="font-mono text-[11px] text-ink-500">{detail.phone_e164 ?? detail.wa_id}</p>
+            <p className="font-mono text-[11px] text-ink-500">{phoneLabel(detail)}</p>
             <div className="mt-1">
               <Tags c={detail} />
             </div>
@@ -509,7 +520,7 @@ function Lista({
                   <Avatar c={c} size={30} />
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium text-ink-100">{who(c)}</p>
-                    <p className="font-mono text-[10px] text-ink-500">{c.phone_e164 ?? c.wa_id}</p>
+                    <p className="font-mono text-[10px] text-ink-500">{phoneLabel(c)}</p>
                   </div>
                 </div>
               </td>

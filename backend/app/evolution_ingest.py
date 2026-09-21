@@ -35,8 +35,12 @@ log = logging.getLogger(__name__)
 MESSAGE_EVENTS = {"messages.upsert", "send.message", "messages.set"}
 STATE_EVENTS = {"connection.update"}
 
-# jid que nao e conversa de pessoa
-_IGNORED_JID_SUFFIXES = ("@g.us", "@broadcast", "@newsletter", "@lid")
+# jid que nao e conversa de pessoa. `@lid` NAO entra aqui: e conversa individual
+# sim, so identificada pelo LID em vez do telefone — veja `identity_of`.
+_IGNORED_JID_SUFFIXES = ("@g.us", "@broadcast", "@newsletter")
+
+# onde o telefone real viaja quando o jid da conversa vem como `@lid`
+PHONE_ALT_FIELDS = ("remoteJidAlt", "senderPn", "participantAlt", "participantPn")
 
 
 def event_name(payload: dict) -> str:
@@ -134,15 +138,52 @@ def ad_referral(message: dict) -> dict | None:
     }
 
 
-def wa_id_of(message: dict) -> str | None:
-    """Numero da PESSOA do outro lado — o mesmo nos dois sentidos da conversa."""
-    key = message.get("key") if isinstance(message.get("key"), dict) else {}
-    jid = key.get("remoteJid") or message.get("remoteJid") or ""
-    jid = str(jid)
-    if not jid or any(jid.endswith(suffix) for suffix in _IGNORED_JID_SUFFIXES):
+def _digits_of_jid(jid: str | None) -> str | None:
+    if not jid:
         return None
-    digits = "".join(c for c in jid.split("@", 1)[0].split(":", 1)[0] if c.isdigit())
-    return digits or None
+    return "".join(c for c in str(jid).split("@", 1)[0].split(":", 1)[0] if c.isdigit()) or None
+
+
+def identity_of(message: dict) -> tuple[str | None, str | None]:
+    """`(telefone, lid)` da PESSOA do outro lado — o mesmo nos dois sentidos da conversa.
+
+    `(None, None)` significa "isto nao e atendimento 1:1": grupo, status, canal.
+
+    O WhatsApp migrou o enderecamento para LID: o `remoteJid` de uma conversa
+    individual passa a vir como `<id>@lid`, um identificador opaco que NAO e
+    telefone. O numero real viaja ao lado, em `remoteJidAlt` (ou `senderPn` /
+    `participantAlt`, conforme o tipo de evento).
+
+    Este codigo tratava `@lid` como "nao e pessoa", na mesma lista de grupo e
+    status — e com isso descartava em silencio toda conversa de contato ja
+    migrado. Numa instancia real isso era quase metade das conversas.
+
+    Quando so o LID chega, ele mesmo vira a identidade: uma conversa no CRM sem
+    telefone e melhor do que conversa nenhuma, e o telefone entra depois, no
+    primeiro evento que trouxer o campo alternativo (veja `upsert_contact`).
+    """
+    key = message.get("key") if isinstance(message.get("key"), dict) else {}
+    jid = str(key.get("remoteJid") or message.get("remoteJid") or "")
+    if not jid or any(jid.endswith(suffix) for suffix in _IGNORED_JID_SUFFIXES):
+        return None, None
+
+    if not jid.endswith("@lid"):
+        return _digits_of_jid(jid), None
+
+    lid = _digits_of_jid(jid)
+    for field in PHONE_ALT_FIELDS:
+        alt = key.get(field) or message.get(field)
+        if alt and not str(alt).endswith("@lid"):
+            phone = _digits_of_jid(alt)
+            if phone:
+                return phone, lid
+    return None, lid
+
+
+def wa_id_of(message: dict) -> str | None:
+    """Identidade da conversa: o telefone quando ele existe, senao o LID."""
+    phone, lid = identity_of(message)
+    return phone or lid
 
 
 def is_from_me(message: dict) -> bool:
@@ -287,9 +328,14 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
         auto_event = (cfg.get("auto_fire_event_name") or "Contact").strip()
 
         for message in _as_messages(payload):
-            wa_id = wa_id_of(message)
+            phone, lid = identity_of(message)
+            wa_id = phone or lid
             if not wa_id:
                 continue  # grupo, status ou jid que nao representa pessoa
+            if phone is None:
+                # conversa que so se identifica por LID. Nao e erro, mas tambem nao
+                # e normal: sem telefone, a conversao nao tem o que mandar pro Meta.
+                result["lid_sem_telefone"] = result.get("lid_sem_telefone", 0) + 1
 
             from_me = is_from_me(message)
             direction = "attendant" if from_me else "customer"
@@ -304,6 +350,7 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
                 attribution,
                 numbers_service.evo_routing_key(number.evo_instance or ""),
                 number.id,
+                lid=lid,
             )
             if created:
                 result["new_contacts"] += 1
@@ -313,7 +360,9 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
             if not from_me and not contact.first_message and text:
                 contact.first_message = text
 
-            if not from_me:
+            if not from_me and phone:
+                # sem telefone (conversa so com LID) nao da pra casar com prospect:
+                # o LID nao e numero, e comparar por ele acharia par errado.
                 await link_prospect(session, contact)
 
             wamid = message_id_of(message)

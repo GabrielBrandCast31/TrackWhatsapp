@@ -25,14 +25,38 @@ router = APIRouter(prefix="/api/evolution", tags=["evolution"])
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:3031")
 
+# Endereco que a EVOLUTION usa pra chamar a gente — que nao e necessariamente o
+# endereco publico da aplicacao. Quando as duas rodam no mesmo Docker, a entrega
+# pode ir pela rede interna (http://backend:8000) e nao depende de tunel, de DNS
+# publico nem de TLS.
+#
+# Existe porque o contrario ja custou caro: com so o PUBLIC_BASE_URL, o webhook
+# ficou registrado num endereco de ngrok que morreu junto com o terminal, e a
+# Evolution passou dias tentando entregar num host que nao respondia. O sintoma
+# na tela era "nao chega mensagem nova", sem nenhum erro do nosso lado — porque
+# de fato nada chegava ate aqui.
+EVOLUTION_CALLBACK_BASE_URL = os.getenv("EVOLUTION_CALLBACK_BASE_URL", "").strip()
+
 # campos do destino Meta que a linha guarda em `overrides`
 META_FIELDS = ("meta_dataset_id", "meta_capi_token", "meta_test_event_code")
 
 
+def _webhook_path(number: WaNumber) -> str:
+    return f"/webhook/evolution/{number.id}/{number.webhook_token or ''}"
+
+
 def webhook_url_for(number: WaNumber) -> str:
-    """URL que vai no webhook da instancia. O token na URL e o que autentica o POST."""
-    base = PUBLIC_BASE_URL.rstrip("/")
-    return f"{base}/webhook/evolution/{number.id}/{number.webhook_token or ''}"
+    """URL que vai REGISTRADA na instancia — a que a Evolution chama de fato.
+
+    O token na URL e o que autentica o POST.
+    """
+    base = (EVOLUTION_CALLBACK_BASE_URL or PUBLIC_BASE_URL).rstrip("/")
+    return f"{base}{_webhook_path(number)}"
+
+
+def public_webhook_url_for(number: WaNumber) -> str:
+    """A mesma rota pelo endereco publico — o que vale pra uma Evolution de fora."""
+    return f"{PUBLIC_BASE_URL.rstrip('/')}{_webhook_path(number)}"
 
 
 def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = None) -> dict:
@@ -55,6 +79,7 @@ def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = N
         "note": number.note,
         "created_at": number.created_at,
         "webhook_url": webhook_url_for(number),
+        "webhook_public_url": public_webhook_url_for(number),
         # segredos nunca voltam em claro — so a marca de que existem
         "api_key__set": bool(number.evo_api_key),
         "api_key__hint": f"...{number.evo_api_key[-4:]}" if (number.evo_api_key or "") else "",
@@ -163,6 +188,7 @@ async def defaults(session: AsyncSession = Depends(get_session)):
         "base_url": cfg.get("evo_base_url") or "",
         "api_key__set": bool(cfg.get("evo_api_key")),
         "webhook_base": PUBLIC_BASE_URL.rstrip("/"),
+        "webhook_callback_base": (EVOLUTION_CALLBACK_BASE_URL or PUBLIC_BASE_URL).rstrip("/"),
         "events": list(EVENT_CATALOG),
         "webhook_events": list(evolution.WEBHOOK_EVENTS),
     }
@@ -386,6 +412,7 @@ async def instance_status(number_id: int, session: AsyncSession = Depends(get_se
     number.last_checked_at = datetime.now(timezone.utc)
     await session.commit()
     out["webhook_url"] = webhook_url_for(number)
+    out["webhook_public_url"] = public_webhook_url_for(number)
     return out
 
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { useAuth } from './authContext'
+import { Logo } from './icons'
 import { Banner, Button, Field, Input } from './ui'
 
 /** Porta de entrada do painel. Sem sessão válida, é a única tela que existe. */
@@ -32,6 +33,7 @@ export default function Login() {
 
       <div className="relative w-full max-w-sm">
         <div className="mb-8 text-center">
+          <Logo className="mx-auto mb-4 h-12 w-12" />
           <h1 className="text-xl font-semibold tracking-tight">
             WhatsApp <span className="text-wa-500">Conversion Tracker</span>
           </h1>

@@ -20,6 +20,7 @@ A plataforma atende VARIAS linhas ao mesmo tempo: cada linha e uma instancia da
 Evolution com Pixel, token e regras proprios.
 """
 
+import asyncio
 import logging
 import os
 
@@ -29,6 +30,7 @@ from sqlalchemy import func, select
 
 from app import auth
 from app import numbers as numbers_service
+from app import state_watch
 from app.db import SessionLocal, init_db
 from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect
 from app.routers import auth as auth_router
@@ -97,6 +99,17 @@ async def on_startup() -> None:
     if pending:
         logging.getLogger(__name__).info("retomando %s abordagem(ns) na fila", pending)
         prospecting_router.start_queue_worker()
+    # estado das linhas por conta propria: sem isso a tela so descobre que uma
+    # sessao caiu se um webhook chegar — e webhook nenhum chega justamente quando
+    # ela cai. Guardado no app pra nao virar task orfa no shutdown.
+    app.state.state_watcher = asyncio.create_task(state_watch.watch_states())
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    watcher = getattr(app.state, "state_watcher", None)
+    if watcher is not None:
+        watcher.cancel()
 
 
 @app.get("/api/health")

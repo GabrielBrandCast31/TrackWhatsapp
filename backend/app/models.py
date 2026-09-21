@@ -91,6 +91,12 @@ class Contact(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     wa_id: Mapped[str] = mapped_column(String(32), index=True)
+    # Identificador LID (`<id>@lid`). Desde a migracao de enderecamento do WhatsApp,
+    # a conversa individual pode chegar identificada por ele em vez do telefone.
+    # Guardado por dois motivos: e por ele que a Evolution indexa a conversa (buscar
+    # o historico por `<telefone>@s.whatsapp.net` volta vazio), e e o que permite
+    # reconhecer a mesma pessoa quando o telefone finalmente aparece.
+    wa_lid: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     phone_e164: Mapped[str | None] = mapped_column(String(32), nullable=True)
     name: Mapped[str | None] = mapped_column(String(160), nullable=True)
 

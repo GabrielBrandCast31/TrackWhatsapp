@@ -22,19 +22,24 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.evolution_ingest import as_utc, text_of, timestamp_of
+from app.evolution_ingest import PHONE_ALT_FIELDS, as_utc, text_of, timestamp_of
 from app.models import Contact, Message, WaNumber
 from app.services import evolution
 from app.tracking import to_e164
 
 log = logging.getLogger(__name__)
 
-# jid que nao e conversa de pessoa
-_IGNORED_SUFFIXES = ("@g.us", "@broadcast", "@newsletter", "@lid")
-
+# jid que nao e conversa de pessoa. `@lid` fica de fora de proposito: veja
+# `identity_from_chat` e o docstring de `evolution_ingest.identity_of`.
+_IGNORED_SUFFIXES = ("@g.us", "@broadcast", "@newsletter")
 
 
 def wa_id_from_jid(jid: str | None) -> str | None:
+    """Digitos do jid, ou None se ele nao representa uma conversa 1:1.
+
+    Para um jid `@lid` isso devolve o LID, que NAO e telefone — quem precisa da
+    distincao usa `identity_from_chat`.
+    """
     if not jid:
         return None
     flat = str(jid)
@@ -42,6 +47,34 @@ def wa_id_from_jid(jid: str | None) -> str | None:
         return None
     digits = "".join(c for c in flat.split("@", 1)[0].split(":", 1)[0] if c.isdigit())
     return digits or None
+
+
+def identity_from_chat(jid: str | None, chat: dict | None = None) -> tuple[str | None, str | None]:
+    """`(telefone, lid)` de uma conversa devolvida pela Evolution.
+
+    A conversa `@lid` nao traz o telefone no proprio jid; ele aparece no `key` da
+    ultima mensagem, em `remoteJidAlt`/`senderPn`. Quando nem ali existe — conversa
+    antiga, de antes de a Evolution passar a guardar o par —, o telefone e mesmo
+    desconhecido, e quem chama decide o que fazer com isso.
+    """
+    if not jid:
+        return None, None
+    flat = str(jid)
+    if any(flat.endswith(suffix) for suffix in _IGNORED_SUFFIXES):
+        return None, None
+    if not flat.endswith("@lid"):
+        return wa_id_from_jid(flat), None
+
+    lid = wa_id_from_jid(flat)
+    last = (chat or {}).get("lastMessage") or (chat or {}).get("last_message") or {}
+    key = last.get("key") if isinstance(last.get("key"), dict) else {}
+    for field in PHONE_ALT_FIELDS:
+        alt = key.get(field)
+        if alt and not str(alt).endswith("@lid"):
+            phone = wa_id_from_jid(str(alt))
+            if phone:
+                return phone, lid
+    return None, lid
 
 
 def _name_of(row: dict) -> str | None:
@@ -105,24 +138,38 @@ async def _save_last_message(session: AsyncSession, contact: Contact, chat: dict
 
 
 async def _upsert(
-    session: AsyncSession, wa_number_id: int, wa_id: str
+    session: AsyncSession, wa_number_id: int, wa_id: str, lid: str | None = None
 ) -> tuple[Contact, bool]:
     """Contato da linha, criando se nao existir. Nunca rouba contato de outra linha."""
-    stmt = (
-        select(Contact)
-        .where(Contact.wa_id == wa_id)
-        .where(Contact.wa_number_id.is_(None) | (Contact.wa_number_id == wa_number_id))
-        .order_by(Contact.wa_number_id.is_(None), Contact.id)
-    )
+
+    def scoped(stmt):
+        return stmt.where(
+            Contact.wa_number_id.is_(None) | (Contact.wa_number_id == wa_number_id)
+        ).order_by(Contact.wa_number_id.is_(None), Contact.id)
+
+    stmt = scoped(select(Contact).where(Contact.wa_id == wa_id))
     contact = (await session.execute(stmt)).scalars().first()
+
+    if contact is None and lid and lid != wa_id:
+        # mesma pessoa, ja conhecida so pelo LID: promove em vez de duplicar
+        by_lid = scoped(select(Contact).where(Contact.wa_lid == lid))
+        contact = (await session.execute(by_lid)).scalars().first()
+        if contact is not None:
+            contact.wa_id = wa_id
+            contact.phone_e164 = to_e164(wa_id)
+
     if contact is not None:
         if contact.wa_number_id is None:
             contact.wa_number_id = wa_number_id
+        if lid and not contact.wa_lid:
+            contact.wa_lid = lid
         return contact, False
 
     contact = Contact(
         wa_id=wa_id,
-        phone_e164=to_e164(wa_id),
+        wa_lid=lid,
+        # conversa identificada so por LID nao tem telefone: veja `upsert_contact`
+        phone_e164=None if (lid and wa_id == lid) else to_e164(wa_id),
         utm={},
         wa_number_id=wa_number_id,
         origin="sync",
@@ -141,6 +188,8 @@ async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict)
         "updated": 0,
         "messages": 0,
         "skipped": 0,
+        # conversas que entraram identificadas so pelo LID, sem telefone conhecido
+        "sem_telefone": 0,
         "errors": [],
     }
 
@@ -176,12 +225,17 @@ async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict)
     now = datetime.now(timezone.utc)
 
     for jid, row in rows.items():
-        wa_id = wa_id_from_jid(jid)
-        if not wa_id:
+        wa_id, lid = identity_from_chat(jid, row)
+        if not wa_id and not lid:
             result["skipped"] += 1  # grupo, status, newsletter
             continue
+        if not wa_id:
+            # conversa por LID cujo telefone a Evolution tambem nao conhece. Entra
+            # assim mesmo: sumir com ela era o bug que este trecho corrige.
+            wa_id = lid
+            result["sem_telefone"] += 1
 
-        contact, created = await _upsert(session, number.id, wa_id)
+        contact, created = await _upsert(session, number.id, wa_id, lid)
         if created:
             result["created"] += 1
         else:
@@ -223,7 +277,9 @@ async def sync_messages(
     session: AsyncSession, number: WaNumber, cfg: dict, contact: Contact, limit: int = 60
 ) -> dict:
     """Historico de uma conversa. NAO avalia regra: ver o docstring do modulo."""
-    jid = f"{contact.wa_id}@s.whatsapp.net"
+    # conversa migrada e indexada pelo LID na Evolution: pedir o historico por
+    # `<telefone>@s.whatsapp.net` volta vazio, e o chat abriria em branco.
+    jid = f"{contact.wa_lid}@lid" if contact.wa_lid else f"{contact.wa_id}@s.whatsapp.net"
     rows = await evolution.find_messages(cfg, jid, limit=limit)
 
     known = set(

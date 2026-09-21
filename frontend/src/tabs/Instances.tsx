@@ -266,6 +266,14 @@ function InstanceCard({
             O token no fim da URL é o que autentica o POST — trate como senha. “Configurar webhook” grava
             essa URL na instância para você.
           </p>
+          {instance.webhook_public_url && instance.webhook_public_url !== instance.webhook_url && (
+            <p className="mt-1.5 text-[11px] leading-snug text-ink-500">
+              A entrega vai pelo endereço interno acima — não depende de túnel nem de DNS público. Pela
+              internet, a mesma rota é{' '}
+              <code className="font-mono text-ink-300">{instance.webhook_public_url}</code>; use essa se a
+              Evolution rodar fora desta máquina.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
