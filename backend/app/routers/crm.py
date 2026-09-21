@@ -21,7 +21,7 @@ from app import crm as crm_service
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
-from app.models import CONTACT_STAGES, Contact, Conversion, Message, WaNumber
+from app.models import CONTACT_STAGES, Contact, Conversion, Message, WaNumber, WebhookLog
 from app.services import evolution
 
 log = logging.getLogger(__name__)
@@ -231,10 +231,62 @@ async def get_contact(contact_id: int, session: AsyncSession = Depends(get_sessi
                 "type": m.msg_type,
                 "body": m.body,
                 "sent_at": m.sent_at,
+                "wamid": m.wamid,
+                # o payload cru NAO vem aqui: uma conversa com anexo carrega
+                # miniatura em base64, e 300 mensagens dessas travariam a tela.
+                # Quem quiser ver pede a mensagem especifica em /messages/{id}/payload.
+                "has_payload": bool(m.raw) or m.webhook_log_id is not None,
             }
             for m in msgs
         ],
         "conversion_events": [serialize_conversion(c) for c in convs],
+    }
+
+
+@router.get("/messages/{message_id}/payload")
+async def message_payload(message_id: int, session: AsyncSession = Depends(get_session)):
+    """Tudo que chegou nessa mensagem: o objeto cru + o POST inteiro do webhook.
+
+    Duas camadas, porque sao coisas diferentes e as duas fazem falta na hora de
+    entender por que um lead nao foi atribuido:
+
+    * `raw` — o objeto da mensagem como o WhatsApp mandou (`key`, `message`,
+      `contextInfo.externalAdReply`, `messageTimestamp`);
+    * `webhook` — o POST inteiro em que ela veio: envelope (`event`, `instance`,
+      `date_time`), o lote todo e o resumo do que o sistema fez com ele.
+
+    Mensagem trazida pelo "puxar historico" nao tem webhook: ela foi buscada na
+    Evolution, nao entregue por ela. Nesse caso `webhook` vem nulo e so `raw` existe.
+    """
+    message = await session.get(Message, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+
+    log_row = (
+        await session.get(WebhookLog, message.webhook_log_id)
+        if message.webhook_log_id is not None
+        else None
+    )
+
+    return {
+        "id": message.id,
+        "contact_id": message.contact_id,
+        "wamid": message.wamid,
+        "direction": message.direction,
+        "type": message.msg_type,
+        "body": message.body,
+        "sent_at": message.sent_at,
+        "raw": message.raw or {},
+        "webhook": None
+        if log_row is None
+        else {
+            "id": log_row.id,
+            "summary": log_row.summary,
+            "created_at": log_row.created_at,
+            "instance": log_row.phone_number_id,
+            "wa_number_id": log_row.wa_number_id,
+            "payload": log_row.payload,
+        },
     }
 
 

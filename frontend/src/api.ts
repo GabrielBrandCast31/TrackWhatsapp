@@ -205,7 +205,7 @@ export type Contact = {
 }
 
 export type ContactDetail = Contact & {
-  messages: { id: number; direction: string; type: string | null; body: string | null; sent_at: string }[]
+  messages: CrmMessage[]
   conversion_events: Conversion[]
 }
 
@@ -556,6 +556,32 @@ export type CrmMessage = {
   type: string | null
   body: string | null
   sent_at: string
+  /** id da mensagem no WhatsApp */
+  wamid?: string | null
+  /** tem payload cru guardado — o botão "payload" da conversa busca sob demanda */
+  has_payload?: boolean
+}
+
+/** O que chegou de verdade numa mensagem: o objeto cru e o POST inteiro do webhook.
+ *  Vem só quando pedido (`crmApi.messagePayload`) porque anexo carrega miniatura
+ *  em base64 e isso não pode viajar junto com a conversa toda. */
+export type MessagePayload = {
+  id: number
+  contact_id: number
+  wamid: string | null
+  direction: string
+  type: string | null
+  body: string | null
+  sent_at: string
+  raw: Record<string, unknown>
+  webhook: {
+    id: number
+    summary: string | null
+    created_at: string
+    instance: string | null
+    wa_number_id: number | null
+    payload: unknown
+  } | null
 }
 
 export type CrmContactDetail = CrmContact & {
@@ -605,6 +631,8 @@ export const crmApi = {
     request<{ fetched: number; saved: number }>(`/api/crm/contacts/${id}/messages/sync`, {
       method: 'POST',
     }),
+  messagePayload: (messageId: number) =>
+    request<MessagePayload>(`/api/crm/messages/${messageId}/payload`),
   reply: (id: number, text: string) =>
     request<{ sent: boolean }>(`/api/crm/contacts/${id}/reply`, {
       method: 'POST',

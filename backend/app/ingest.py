@@ -216,6 +216,14 @@ async def ingest_payload(
     unknown_lines: list[str] = []
     blocked_lines: list[str] = []
 
+    # O log entra antes do processamento pra que cada mensagem possa apontar pro
+    # POST que a trouxe (`Message.webhook_log_id`) — e assim a tela mostrar o
+    # payload inteiro, e nao so o objeto da mensagem. Resumo e linha sao
+    # preenchidos no fim, quando o payload ja foi lido, no mesmo commit.
+    log_entry = WebhookLog(payload=payload)
+    session.add(log_entry)
+    await session.flush()
+
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
             value = change.get("value") or {}
@@ -280,6 +288,7 @@ async def ingest_payload(
                         msg_type=message.get("type"),
                         body=text,
                         raw=message,
+                        webhook_log_id=log_entry.id,
                         sent_at=_ts(message),
                     )
                 )
@@ -299,17 +308,13 @@ async def ingest_payload(
         # sem isso, uma linha nova cairia no numero padrao sem ninguem notar
         destino = "caiu no número padrão" if log_number_id is not None else "sem destino"
         summary += f" — linha {', '.join(unknown_lines)} nao cadastrada ({destino})"
-    session.add(
-        WebhookLog(
-            payload=payload,
-            summary=summary,
-            phone_number_id=log_phone_number_id,
-            wa_number_id=log_number_id,
-        )
-    )
+    log_entry.summary = summary
+    log_entry.phone_number_id = log_phone_number_id
+    log_entry.wa_number_id = log_number_id
     await session.commit()
 
     return {
+        "webhook_log_id": log_entry.id,
         "messages": messages_saved,
         "new_contacts": new_contacts,
         "statuses": statuses,

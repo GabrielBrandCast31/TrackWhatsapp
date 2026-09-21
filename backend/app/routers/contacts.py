@@ -105,6 +105,9 @@ async def get_contact(contact_id: int, session: AsyncSession = Depends(get_sessi
                 "type": m.msg_type,
                 "body": m.body,
                 "sent_at": m.sent_at,
+                "wamid": m.wamid,
+                # payload cru so sob demanda, em /api/crm/messages/{id}/payload
+                "has_payload": bool(m.raw) or m.webhook_log_id is not None,
             }
             for m in msgs
         ],

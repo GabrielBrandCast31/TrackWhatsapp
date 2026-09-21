@@ -255,6 +255,28 @@ com a avaliação das regras de palavra-chave. Ou seja, responder pelo CRM com o
 configurado dispara o evento igual a responder pelo celular. Gravar dos dois lados
 duplicaria conversa e disparo.
 
+### Ver o payload de uma mensagem
+
+Na conversa (CRM ou Leads), cada mensagem tem **payload** ao lado da hora. Ele abre o que
+chegou de verdade naquela mensagem, em duas camadas:
+
+- **mensagem (objeto cru)** — o objeto do WhatsApp: `key`, `message`, `messageTimestamp` e
+  o `contextInfo.externalAdReply` com o `ctwaClid`. É aqui que se vê, sem adivinhar, se um
+  lead veio sem atribuição porque o anúncio não mandou o bloco;
+- **POST do webhook** — o corpo inteiro que a Evolution entregou, com envelope (`event`,
+  `instance`, `date_time`), o lote todo e o resumo do que o sistema fez com ele.
+
+Cada mensagem guarda de qual POST ela veio (`messages.webhook_log_id`), então o payload
+mostrado é o daquela mensagem, não o último que chegou. Os dois blocos têm **copiar**.
+
+A busca é sob demanda (`GET /api/crm/messages/{id}/payload`): mensagem com anexo carrega
+miniatura em base64, e isso não pode viajar junto com a conversa inteira.
+
+Mensagem trazida pelo *puxar histórico* não tem POST — ela foi buscada na Evolution, não
+entregue por ela; nesse caso só o objeto cru existe. O mesmo vale para o que já estava no
+banco antes desta tela. Para o fluxo bruto de tudo que entra, independente de conversa, a
+aba **Conexão** (e a lista de linhas) continua mostrando *Últimos webhooks recebidos*.
+
 ## Testar sem gastar clique em anúncio
 
 Aba **Leads** → *Simular lead*. Injeta um payload idêntico ao da Evolution, com
@@ -423,7 +445,8 @@ backend/app/
   routers/
     evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
     rules.py              regras de palavra-chave + /simulate
-    crm.py                conversas da linha: etapa, nota, sync, resposta e disparo
+    crm.py                conversas da linha: etapa, nota, sync, resposta, disparo e o
+                          payload cru de uma mensagem (/messages/{id}/payload)
     auth.py               login, refresh, troca de senha e cadastro de usuários
     webhook.py            /webhook/evolution (token por linha) e /webhook/whatsapp
     contacts.py           leads e o log cru dos webhooks
@@ -444,6 +467,7 @@ backend/app/
 
 backend/tests/
   test_auth.py            fumaça do login: 401 sem token, papéis, refresh, troca de senha
+  test_payload.py         webhook -> mensagem -> payload cru servido sob demanda
 ```
 
 ## Notas

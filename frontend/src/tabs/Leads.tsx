@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { MessagePayloadToggle } from '../MessagePayload'
 import { useNumber } from '../numberContext'
 import { api, evolutionApi, type Contact, type ContactDetail, type Conversion } from '../api'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Toggle, when } from '../ui'
@@ -243,10 +244,13 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
                       }`}
                     >
                       <p className="text-sm text-ink-100">{m.body ?? `[${m.type}]`}</p>
-                      <p className="mt-1 flex items-center gap-2 font-mono text-[11px] text-ink-500">
+                      {/* div, nao p: o payload aberto traz blocos em bloco, que
+                          nao podem morar dentro de um paragrafo */}
+                      <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink-500">
                         <span>{outbound ? 'atendente' : 'cliente'}</span>
                         <span>{when(m.sent_at)}</span>
-                      </p>
+                        {m.has_payload !== false && <MessagePayloadToggle messageId={m.id} />}
+                      </div>
                     </li>
                   )
                 })}

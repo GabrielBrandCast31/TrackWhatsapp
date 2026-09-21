@@ -10,6 +10,7 @@ import {
   type CrmPipeline,
   type CrmStage,
 } from '../api'
+import { MessagePayloadToggle } from '../MessagePayload'
 import { useNumber } from '../numberContext'
 import {
   Badge,
@@ -199,9 +200,12 @@ function Thread({ messages }: { messages: CrmContactDetail['messages'] }) {
             }`}
           >
             <p className="whitespace-pre-wrap text-sm text-ink-100">{m.body ?? `[${m.type}]`}</p>
-            <p className="mt-1 font-mono text-[11px] text-ink-500">
-              {out ? 'atendente' : 'cliente'} · {when(m.sent_at)}
-            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink-500">
+              <span>
+                {out ? 'atendente' : 'cliente'} · {when(m.sent_at)}
+              </span>
+              {m.has_payload !== false && <MessagePayloadToggle messageId={m.id} />}
+            </div>
           </li>
         )
       })}

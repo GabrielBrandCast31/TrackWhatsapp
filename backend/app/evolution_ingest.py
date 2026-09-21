@@ -318,6 +318,20 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
         "ignored": None,
     }
 
+    # O log do webhook entra ANTES de processar: e ele que guarda o payload
+    # inteiro (envelope + lote), e cada mensagem gravada aponta pra ele em
+    # `webhook_log_id`. Sem isso, a tela so tinha `Message.raw` (a mensagem
+    # sozinha) e nao havia como dizer QUAL POST a trouxe. O resumo so existe no
+    # fim, entao ele e preenchido la — no mesmo commit.
+    log_entry = WebhookLog(
+        payload=payload,
+        phone_number_id=number.evo_instance,
+        wa_number_id=number.id,
+    )
+    session.add(log_entry)
+    await session.flush()
+    result["webhook_log_id"] = log_entry.id
+
     if event in STATE_EVENTS:
         state = (payload.get("data") or {}).get("state") if isinstance(payload.get("data"), dict) else None
         if state:
@@ -380,6 +394,7 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
                     msg_type=message.get("messageType"),
                     body=text,
                     raw=message,
+                    webhook_log_id=log_entry.id,
                     sent_at=stamp,
                 )
             )
@@ -434,14 +449,7 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
         parts.append(result["ignored"])
     summary = " — ".join(parts)
 
-    session.add(
-        WebhookLog(
-            payload=payload,
-            summary=summary,
-            phone_number_id=number.evo_instance,
-            wa_number_id=number.id,
-        )
-    )
+    log_entry.summary = summary
     await session.commit()
     result["summary"] = summary
     return result

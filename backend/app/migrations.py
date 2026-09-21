@@ -29,6 +29,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "unread_count": "INTEGER",
         "synced_at": "TIMESTAMP",
     },
+    # ponteiro da mensagem pro POST de webhook que a trouxe (ver o payload cru)
+    "messages": {"webhook_log_id": "INTEGER"},
     "prospects": {"wa_number_id": "INTEGER"},
     "prospect_searches": {"wa_number_id": "INTEGER"},
     "outreaches": {"wa_number_id": "INTEGER"},

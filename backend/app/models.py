@@ -163,7 +163,18 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(String(8), default="in")  # in | out
     msg_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # O objeto da mensagem exatamente como chegou (`data` do webhook, ou a linha
+    # devolvida pela Evolution no "puxar historico"). E daqui que a tela mostra o
+    # payload cru de uma mensagem especifica.
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Qual POST do webhook trouxe esta mensagem. Guardado porque `raw` e so a
+    # mensagem: o envelope (event, instance, date_time) e o resto do lote ficam
+    # no WebhookLog, e sem esse ponteiro nao havia como achar QUAL log era o
+    # desta mensagem — so dava pra chutar pelo horario. Nulo em mensagem que veio
+    # do historico da instancia, que nao passa por webhook nenhum.
+    webhook_log_id: Mapped[int | None] = mapped_column(
+        ForeignKey("webhook_logs.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     contact: Mapped["Contact"] = relationship(back_populates="messages")
