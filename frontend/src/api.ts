@@ -616,8 +616,22 @@ export type CrmSyncResult = {
   errors: string[]
 }
 
+/** Cursor de mudança do CRM. A tela compara `cursor` com o anterior: igual, nada
+ *  mudou; diferente, recarrega. É o que sustenta a atualização automática. */
+export type CrmActivity = {
+  contacts: number
+  messages: number
+  last_message_id: number
+  unread: number
+  conversions: number
+  last_activity_at: string | null
+  cursor: string
+}
+
 export const crmApi = {
   stages: () => request<{ value: CrmStage; label: string }[]>('/api/crm/stages'),
+  activity: (numberId?: number) =>
+    request<CrmActivity>(`/api/crm/activity${qs({ number_id: numberId })}`),
   contacts: (filters: CrmFilters = {}) =>
     request<CrmContact[]>(`/api/crm/contacts${qs(filters as Record<string, unknown>)}`),
   pipeline: (numberId?: number) =>

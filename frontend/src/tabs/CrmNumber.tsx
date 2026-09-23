@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   api,
@@ -42,6 +42,98 @@ const STAGE_TONE: Record<CrmStage, 'neutral' | 'info' | 'warn' | 'good' | 'bad'>
   qualificado: 'warn',
   ganho: 'good',
   perdido: 'bad',
+}
+
+/** De quanto em quanto tempo a tela pergunta ao servidor se algo mudou. */
+const LIVE_POLL_MS = 4000
+
+const LIVE_KEY = 'wa.crmLive'
+
+/** Ligado por padrão: quem abre o CRM quer ver a conversa acontecendo. */
+function readLive(): boolean {
+  try {
+    return localStorage.getItem(LIVE_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+/** Sinal de que a tela está se atualizando sozinha e de quando isso aconteceu. */
+function LiveDot({ on, at }: { on: boolean; at: Date | null }) {
+  const label = !on
+    ? 'atualização automática desligada'
+    : at
+      ? `última mudança às ${at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+      : 'acompanhando novas mensagens'
+  return (
+    <span
+      title={label}
+      className="flex items-center gap-1.5 rounded-lg border border-ink-800 bg-ink-850 px-2 py-1 text-[11px] text-ink-500"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${on ? 'animate-pulse bg-wa-500' : 'bg-ink-600'}`} />
+      <span className="hidden sm:block">{on ? 'ao vivo' : 'pausado'}</span>
+    </span>
+  )
+}
+
+/** Mantém o CRM vivo sem recarregar a página.
+ *
+ *  A cada batida pede só o cursor de `/api/crm/activity` — cinco contagens, nada
+ *  de listar conversa. Enquanto o cursor não muda, nada é recarregado: a tela
+ *  fica parada de propósito, e ninguém perde o que estava digitando. Quando ele
+ *  muda (mensagem nova, conversa nova, etapa movida, lida/não lida) o `onChange`
+ *  refaz as consultas de verdade.
+ *
+ *  Com a aba em segundo plano a batida é pulada — não adianta gastar requisição
+ *  contra uma tela que ninguém está olhando — e volta assim que ela reaparece.
+ */
+function useCrmLive(numberId: number | undefined, enabled: boolean, onChange: () => void) {
+  const cursor = useRef<string | null>(null)
+  const handler = useRef(onChange)
+  handler.current = onChange
+
+  useEffect(() => {
+    // trocou de linha: o cursor da linha anterior não diz nada sobre esta
+    cursor.current = null
+  }, [numberId])
+
+  useEffect(() => {
+    if (!enabled) return
+    let alive = true
+    let timer = 0
+
+    const tick = async () => {
+      if (!alive) return
+      if (document.visibilityState === 'visible') {
+        try {
+          const { cursor: next } = await crmApi.activity(numberId)
+          if (!alive) return
+          // a primeira leitura só guarda a régua: ela não é uma mudança
+          if (cursor.current !== null && next !== cursor.current) handler.current()
+          cursor.current = next
+        } catch {
+          // rede oscilando ou servidor reiniciando: a próxima batida tenta de novo
+        }
+      }
+      if (alive) timer = window.setTimeout(tick, LIVE_POLL_MS)
+    }
+
+    const wake = () => {
+      if (document.visibilityState !== 'visible') return
+      window.clearTimeout(timer)
+      void tick()
+    }
+
+    void tick()
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('focus', wake)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('focus', wake)
+    }
+  }, [numberId, enabled])
 }
 
 function shortTime(iso: string | null) {
@@ -218,17 +310,24 @@ function ContactPanel({
   onChanged,
   onClose,
   compact,
+  liveTick = 0,
 }: {
   contactId: number
   onChanged: () => Promise<void>
   onClose?: () => void
   compact?: boolean
+  /** Sobe a cada mudança detectada no servidor: é o gatilho de releitura desta conversa. */
+  liveTick?: number
 }) {
   const [detail, setDetail] = useState<CrmContactDetail | null>(null)
   const [note, setNote] = useState('')
   const [reply, setReply] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
+  const detailRef = useRef<CrmContactDetail | null>(null)
+  detailRef.current = detail
+  const threadRef = useRef<HTMLDivElement>(null)
+  const seenMessages = useRef(0)
 
   const load = useCallback(async () => {
     const data = await crmApi.contact(contactId)
@@ -236,16 +335,45 @@ function ContactPanel({
     setNote(data.note ?? '')
   }, [contactId])
 
+  /** Releitura de fundo: igual à de cima, mas não pisa na nota que está sendo
+   *  digitada. Só acompanha o servidor quando não há edição pendente. */
+  const liveLoad = useCallback(async () => {
+    const data = await crmApi.contact(contactId)
+    setNote((cur) => (cur === (detailRef.current?.note ?? '') ? data.note ?? '' : cur))
+    setDetail(data)
+  }, [contactId])
+
   useEffect(() => {
     void load().catch((e) => setMsg({ tone: 'bad', text: (e as Error).message }))
   }, [load])
 
-  // abrir a conversa marca como lida — é o que o atendente acabou de fazer
+  useEffect(() => {
+    if (liveTick === 0) return
+    void liveLoad().catch(() => {
+      // a lista já avisa quando o servidor some; aqui o silêncio é melhor que um
+      // banner piscando a cada batida
+    })
+  }, [liveTick, liveLoad])
+
+  // conversa aberta fica lida: ao abrir e a cada mensagem que chegar com ela na tela
   useEffect(() => {
     if (detail && detail.unread_count > 0) {
       void crmApi.patch(contactId, { mark_read: true }).then(() => onChanged())
     }
-  }, [detail?.id])
+  }, [detail?.id, detail?.unread_count])
+
+  // mensagem nova desce a conversa sozinha — senão ela chega fora da vista
+  useEffect(() => {
+    const count = detail?.messages.length ?? 0
+    if (count === seenMessages.current) return
+    seenMessages.current = count
+    const el = threadRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [detail?.messages.length])
+
+  useEffect(() => {
+    seenMessages.current = 0
+  }, [contactId])
 
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name)
@@ -348,7 +476,10 @@ function ContactPanel({
             {busy === 'history' ? 'puxando…' : 'puxar histórico'}
           </Button>
         </div>
-        <div className={compact ? 'max-h-[46vh] overflow-y-auto pr-1' : 'max-h-80 overflow-y-auto pr-1'}>
+        <div
+          ref={threadRef}
+          className={compact ? 'max-h-[46vh] overflow-y-auto pr-1' : 'max-h-80 overflow-y-auto pr-1'}
+        >
           <Thread messages={detail.messages} />
         </div>
       </div>
@@ -560,11 +691,13 @@ function Inbox({
   selectedId,
   onOpen,
   onChanged,
+  liveTick,
 }: {
   rows: CrmContact[]
   selectedId: number | null
   onOpen: (id: number) => void
   onChanged: () => Promise<void>
+  liveTick: number
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -608,7 +741,7 @@ function Inbox({
 
       <div className="rounded-xl border border-ink-800 bg-ink-900 p-5">
         {selectedId ? (
-          <ContactPanel contactId={selectedId} onChanged={onChanged} compact />
+          <ContactPanel contactId={selectedId} onChanged={onChanged} liveTick={liveTick} compact />
         ) : (
           <Empty>Escolha uma conversa à esquerda.</Empty>
         )}
@@ -628,6 +761,9 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
+  const [live, setLive] = useState(readLive)
+  const [liveTick, setLiveTick] = useState(0)
+  const [liveAt, setLiveAt] = useState<Date | null>(null)
 
   const load = useCallback(async () => {
     const [list, pipeline] = await Promise.all([
@@ -653,6 +789,25 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
     await load()
     onChanged()
   }, [load, onChanged])
+
+  // o servidor mudou: refaz a lista, o funil, os indicadores do topo e a conversa aberta
+  useCrmLive(numberId, live, () => {
+    void load().catch(() => {
+      // sem banner: a lista continua mostrando o último estado bom
+    })
+    onChanged()
+    setLiveTick((n) => n + 1)
+    setLiveAt(new Date())
+  })
+
+  const toggleLive = (v: boolean) => {
+    setLive(v)
+    try {
+      localStorage.setItem(LIVE_KEY, v ? '1' : '0')
+    } catch {
+      // navegador sem storage: a preferência vale só pra sessão atual
+    }
+  }
 
   const move = async (id: number, stage: CrmStage) => {
     // otimista: o card muda de coluna na hora, e o servidor confirma depois
@@ -721,6 +876,7 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
                 </button>
               ))}
             </div>
+            <LiveDot on={live} at={liveAt} />
             <Button
               size="sm"
               variant="primary"
@@ -799,6 +955,9 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
                 label="Só vindas de anúncio"
               />
             </div>
+            <div className="pb-1.5">
+              <Toggle checked={live} onChange={toggleLive} label="Atualizar sozinho" />
+            </div>
             <div className="pb-1">
               <Button size="sm" onClick={() => void refresh()}>
                 atualizar
@@ -819,7 +978,7 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
           </Card>
           <Card title="Detalhe da conversa">
             {selectedId ? (
-              <ContactPanel contactId={selectedId} onChanged={refresh} />
+              <ContactPanel contactId={selectedId} onChanged={refresh} liveTick={liveTick} />
             ) : (
               <Empty>Selecione uma conversa.</Empty>
             )}
@@ -828,7 +987,13 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
       )}
 
       {view === 'inbox' && (
-        <Inbox rows={rows} selectedId={selectedId} onOpen={setSelectedId} onChanged={refresh} />
+        <Inbox
+          rows={rows}
+          selectedId={selectedId}
+          onOpen={setSelectedId}
+          onChanged={refresh}
+          liveTick={liveTick}
+        />
       )}
 
       {/* no kanban o detalhe abre sobreposto: as colunas já ocupam a largura toda */}
@@ -844,6 +1009,7 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
             <ContactPanel
               contactId={selectedId}
               onChanged={refresh}
+              liveTick={liveTick}
               onClose={() => setSelectedId(null)}
             />
           </div>

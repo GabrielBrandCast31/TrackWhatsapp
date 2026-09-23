@@ -19,10 +19,16 @@ antiga mandaria uma enxurrada de eventos falsos pro Meta.
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.evolution_ingest import PHONE_ALT_FIELDS, as_utc, text_of, timestamp_of
+from app.evolution_ingest import (
+    PHONE_ALT_FIELDS,
+    apply_ad_attribution,
+    as_utc,
+    text_of,
+    timestamp_of,
+)
 from app.models import Contact, Message, WaNumber
 from app.services import evolution
 from app.tracking import to_e164
@@ -190,6 +196,8 @@ async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict)
         "skipped": 0,
         # conversas que entraram identificadas so pelo LID, sem telefone conhecido
         "sem_telefone": 0,
+        # leads que ganharam o ctwa_clid do anuncio nesta sincronizacao
+        "attributed": 0,
         "errors": [],
     }
 
@@ -263,14 +271,48 @@ async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict)
         if isinstance(unread, int):
             contact.unread_count = unread
 
+        last = row.get("lastMessage") or row.get("last_message")
+        if isinstance(last, dict) and apply_ad_attribution(contact, last):
+            result["attributed"] += 1
+
         await session.flush()  # garante contact.id antes de pendurar a mensagem
         if await _save_last_message(session, contact, row):
             result["messages"] += 1
 
         contact.synced_at = now
 
+    result["attributed"] += await backfill_attribution(session, number.id)
     await session.commit()
     return result
+
+
+async def backfill_attribution(session: AsyncSession, wa_number_id: int | None = None) -> int:
+    """Recupera o `ctwa_clid` de mensagens que ja estao no banco.
+
+    Antes o sync gravava o objeto cru sem olhar o anuncio, entao ha lead com o
+    `ctwaClid` guardado no `raw` da primeira mensagem e a coluna vazia. Aqui so
+    entram contatos sem clid e mensagens cujo texto cru cita o anuncio — o filtro
+    por texto roda no banco, e so o que passa nele e decodificado.
+    """
+    stmt = (
+        select(Contact, Message.raw)
+        .join(Message, Message.contact_id == Contact.id)
+        .where(Contact.ctwa_clid.is_(None))
+        .where(Message.direction == "in")
+        .where(cast(Message.raw, String).like("%ctwa%"))
+        .order_by(Message.sent_at)
+    )
+    if wa_number_id is not None:
+        stmt = stmt.where(Contact.wa_number_id == wa_number_id)
+
+    fixed = 0
+    for contact, raw in (await session.execute(stmt)).all():
+        if contact.ctwa_clid:
+            continue  # ja resolvido por uma mensagem anterior deste mesmo lote
+        if apply_ad_attribution(contact, raw or {}):
+            fixed += 1
+            log.info("contato %s: ctwa_clid recuperado do historico gravado", contact.id)
+    return fixed
 
 
 async def sync_messages(
@@ -296,7 +338,12 @@ async def sync_messages(
     newest = as_utc(contact.last_message_at)
     newest_body, newest_from_me = contact.last_message_body, contact.last_message_from_me
 
+    attributed = False
     for row in rows:
+        # antes do dedupe de proposito: a mensagem do anuncio pode ja estar
+        # gravada de um sync antigo, que nao extraia a atribuicao.
+        attributed = apply_ad_attribution(contact, row) or attributed
+
         key = row.get("key") if isinstance(row.get("key"), dict) else {}
         wamid = str(key.get("id")) if key.get("id") else None
         if wamid and wamid in known:
@@ -328,4 +375,4 @@ async def sync_messages(
         contact.last_message_from_me = newest_from_me
     contact.synced_at = datetime.now(timezone.utc)
     await session.commit()
-    return {"fetched": len(rows), "saved": saved}
+    return {"fetched": len(rows), "saved": saved, "attributed": attributed}

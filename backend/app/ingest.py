@@ -120,6 +120,20 @@ async def upsert_contact(
     if phone_number_id:
         contact.phone_number_id = phone_number_id
 
+    merge_attribution(contact, attribution)
+
+    contact.last_seen_at = datetime.now(timezone.utc)
+    return contact, created
+
+
+def merge_attribution(contact: Contact, attribution: dict) -> bool:
+    """Completa a atribuicao do contato sem sobrescrever o que ja existe.
+
+    Separado de `upsert_contact` porque o sync de historico da Evolution tambem
+    precisa disso: o bloco do anuncio chega igual por la, so que buscado em vez
+    de entregue. Devolve True se o contato ganhou um `ctwa_clid` agora.
+    """
+    had_clid = bool(contact.ctwa_clid)
     for field in _ATTRIBUTION_FIELDS:
         incoming = attribution.get(field)
         if incoming and not getattr(contact, field):
@@ -130,9 +144,7 @@ async def upsert_contact(
         merged = dict(contact.utm or {})
         merged.update(incoming_utm)
         contact.utm = merged
-
-    contact.last_seen_at = datetime.now(timezone.utc)
-    return contact, created
+    return not had_clid and bool(contact.ctwa_clid)
 
 
 async def link_prospect(session: AsyncSession, contact: Contact) -> int | None:

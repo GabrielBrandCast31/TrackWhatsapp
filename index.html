@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proposta Comercial — Gestão de Marketing MyLash</title>
+    <style>
+        :root {
+            --bg: #070908;
+            --panel: #101412;
+            --panel2: #151a17;
+            --text: #f4f7f5;
+            --muted: #a8b0aa;
+            --line: rgba(255, 255, 255, .10);
+            --accent: #c7ff3d;
+            --accent2: #8ee000;
+            --white: #fff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        html {
+            scroll-behavior: smooth
+        }
+
+        body {
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 80% 0%, rgba(199, 255, 61, .10), transparent 30%), var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+
+        .wrap {
+            max-width: 1180px;
+            margin: auto;
+            padding: 0 28px
+        }
+
+        section {
+            padding: 90px 0
+        }
+
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            position: relative;
+            overflow: hidden
+        }
+
+        .hero:before {
+            content: "";
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: rgba(199, 255, 61, .07);
+            filter: blur(100px);
+            right: -180px;
+            top: -160px
+        }
+
+        .eyebrow {
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: .18em;
+            font-size: 12px;
+            font-weight: 800;
+            margin-bottom: 20px
+        }
+
+        h1 {
+            font-size: clamp(48px, 7vw, 88px);
+            line-height: .94;
+            letter-spacing: -.055em;
+            max-width: 900px
+        }
+
+        h1 span {
+            color: var(--accent)
+        }
+
+        .hero p {
+            font-size: 20px;
+            color: var(--muted);
+            max-width: 680px;
+            margin: 30px 0 36px
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--accent);
+            color: #0a0d09;
+            padding: 15px 22px;
+            border-radius: 12px;
+            font-weight: 850;
+            text-decoration: none
+        }
+
+        .btn:hover {
+            background: #d8ff72
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 70px;
+            max-width: 800px
+        }
+
+        .stat {
+            border-top: 1px solid var(--line);
+            padding-top: 18px
+        }
+
+        .stat strong {
+            display: block;
+            font-size: 28px
+        }
+
+        .stat span {
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .section-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+            align-items: end;
+            margin-bottom: 38px
+        }
+
+        h2 {
+            font-size: clamp(34px, 5vw, 58px);
+            letter-spacing: -.045em;
+            line-height: 1
+        }
+
+        .section-head p {
+            color: var(--muted);
+            max-width: 470px
+        }
+
+        .problem-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px
+        }
+
+        .card {
+            background: linear-gradient(145deg, var(--panel2), var(--panel));
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            padding: 28px
+        }
+
+        .num {
+            color: var(--accent);
+            font-weight: 900;
+            font-size: 13px;
+            margin-bottom: 50px
+        }
+
+        .card h3 {
+            font-size: 21px;
+            margin-bottom: 9px
+        }
+
+        .card p {
+            color: var(--muted);
+            font-size: 15px
+        }
+
+        .plans {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            align-items: stretch
+        }
+
+        .plan {
+            position: relative;
+            background: #0e1210;
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            padding: 32px;
+            display: flex;
+            flex-direction: column
+        }
+
+        .plan.featured {
+            border: 1px solid rgba(199, 255, 61, .65);
+            box-shadow: 0 0 0 1px rgba(199, 255, 61, .08), 0 30px 80px rgba(199, 255, 61, .07);
+            transform: translateY(-10px)
+        }
+
+        .tag {
+            position: absolute;
+            right: 20px;
+            top: 20px;
+            background: var(--accent);
+            color: #10130d;
+            border-radius: 999px;
+            padding: 7px 10px;
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase
+        }
+
+        .plan-name {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: .13em;
+            color: var(--muted);
+            font-weight: 800
+        }
+
+        .price {
+            font-size: 48px;
+            font-weight: 900;
+            letter-spacing: -.05em;
+            margin: 15px 0 5px
+        }
+
+        .price small {
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 500;
+            letter-spacing: 0
+        }
+
+        .plan-desc {
+            color: var(--muted);
+            min-height: 62px;
+            margin-bottom: 24px
+        }
+
+        ul {
+            list-style: none;
+            display: grid;
+            gap: 12px;
+            margin: 0 0 30px
+        }
+
+        li {
+            font-size: 14px;
+            color: #d9dedb;
+            display: flex;
+            gap: 10px
+        }
+
+        li:before {
+            content: "✓";
+            color: var(--accent);
+            font-weight: 900
+        }
+
+        .plan .btn {
+            margin-top: auto;
+            justify-content: center
+        }
+
+        .comparison {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 20px
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 760px
+        }
+
+        th,
+        td {
+            padding: 17px 18px;
+            border-bottom: 1px solid var(--line);
+            text-align: left
+        }
+
+        th {
+            background: #121713;
+            font-size: 13px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .08em
+        }
+
+        td {
+            font-size: 14px
+        }
+
+        td:not(:first-child) {
+            text-align: center
+        }
+
+        .yes {
+            color: var(--accent);
+            font-weight: 900
+        }
+
+        .no {
+            color: #5e6761
+        }
+
+        .process {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px
+        }
+
+        .step {
+            padding: 24px;
+            border-left: 2px solid var(--accent);
+            background: rgba(255, 255, 255, .025)
+        }
+
+        .step b {
+            font-size: 13px;
+            color: var(--accent)
+        }
+
+        .step h3 {
+            margin: 14px 0 7px
+        }
+
+        .step p {
+            color: var(--muted);
+            font-size: 14px
+        }
+
+        .final {
+            text-align: center;
+            padding: 110px 20px;
+            border-top: 1px solid var(--line);
+            background: radial-gradient(circle at center, rgba(199, 255, 61, .09), transparent 45%)
+        }
+
+        .final h2 {
+            max-width: 800px;
+            margin: 0 auto 20px
+        }
+
+        .final p {
+            color: var(--muted);
+            max-width: 600px;
+            margin: 0 auto 30px
+        }
+
+        footer {
+            padding: 28px 0;
+            color: #68716b;
+            font-size: 12px;
+            border-top: 1px solid var(--line)
+        }
+
+        @media(max-width:850px) {
+            section {
+                padding: 65px 0
+            }
+
+            .plans,
+            .problem-grid {
+                grid-template-columns: 1fr
+            }
+
+            .plan.featured {
+                transform: none
+            }
+
+            .process {
+                grid-template-columns: 1fr 1fr
+            }
+
+            .stats {
+                grid-template-columns: 1fr
+            }
+
+            .section-head {
+                display: block
+            }
+
+            .section-head p {
+                margin-top: 18px
+            }
+        }
+
+        @media(max-width:520px) {
+            .wrap {
+                padding: 0 18px
+            }
+
+            h1 {
+                font-size: 48px
+            }
+
+            .hero p {
+                font-size: 17px
+            }
+
+            .process {
+                grid-template-columns: 1fr
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <section class="hero">
+        <div class="wrap">
+            <div class="eyebrow">Proposta de crescimento • Gestão de 2 unidades MyLash</div>
+            <h1>Mais agendamentos.<br><span>Mais ocupação.</span></h1>
+            <p>
+                Uma estrutura de marketing pensada para transformar Google, Meta e conteúdo
+                em um processo contínuo de aquisição, relacionamento e crescimento da clínica.
+            </p>
+            <a class="btn" href="#planos">Conhecer os planos ↓</a>
+
+            <div class="stats">
+                <div class="stat"><strong>Google</strong><span>Captura de demanda</span></div>
+                <div class="stat"><strong>Meta</strong><span>Geração de oportunidades</span></div>
+                <div class="stat"><strong>Conteúdo</strong><span>Marca e autoridade</span></div>
+            </div>
+
+            <div class="stats" style="margin-top:42px;max-width:1000px">
+                <div class="stat"><strong>2 unidades</strong><span>Gestão integrada, com leitura individual de cada
+                        operação</span></div>
+                <div class="stat"><strong>MyLash</strong><span>Método, técnicas e experiência de marca como ativos de
+                        conversão</span></div>
+                <div class="stat"><strong>Agendamento</strong><span>Foco em transformar demanda em oportunidades reais
+                        para as unidades</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap">
+            <div class="section-head">
+                <h2>O objetivo não é<br>“rodar anúncio”.</h2>
+                <p>
+                    É criar uma operação de aquisição que conecte mídia, posicionamento,
+                    conteúdo e conversão — com decisões baseadas em dados.
+                </p>
+            </div>
+            <div class="problem-grid">
+                <div class="card">
+                    <div class="num">01 / AQUISIÇÃO</div>
+                    <h3>Colocar cada unidade na frente de quem busca beleza do olhar.</h3>
+                    <p>Estratégias de Google e Meta para gerar oportunidades para extensão de cílios, sobrancelhas e
+                        demais procedimentos prioritários, respeitando a demanda de cada região.</p>
+                </div>
+                <div class="card">
+                    <div class="num">02 / ESTRATÉGIA</div>
+                    <h3>Entender quais procedimentos e campanhas movimentam o crescimento de cada unidade.</h3>
+                    <p>Planejamento contínuo para identificar oportunidades, gargalos e novas frentes de crescimento,
+                        analisando as duas unidades de forma individual e consolidada.</p>
+                </div>
+                <div class="card">
+                    <div class="num">03 / AUTORIDADE</div>
+                    <h3>Transformar o método e a experiência MyLash em motivos para escolher a marca.</h3>
+                    <p>Conteúdo estratégico para comunicar o Método MyLash, técnicas, resultados, experiência e
+                        diferenciais da marca, apoiando a decisão de agendamento.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="planos">
+        <div class="wrap">
+            <div class="section-head">
+                <h2>Escolha o nível<br>de operação.</h2>
+                <p>Três formatos de operação para as 2 unidades MyLash. O investimento em mídia paga é separado da
+                    mensalidade.</p>
+            </div>
+
+            <div class="plans">
+                <article class="plan">
+                    <div class="plan-name">Plano 01</div>
+                    <div class="price">R$ 1.500 <small>/ mês</small></div>
+                    <p class="plan-desc">Gestão de aquisição das 2 unidades através dos principais canais de mídia paga.
+                    </p>
+                    <ul>
+                        <li>Gestão de Google Ads</li>
+                        <li>Gestão de Meta Ads</li>
+                        <li>Planejamento de campanhas</li>
+                        <li>Criação e gestão de públicos</li>
+                        <li>Monitoramento de métricas</li>
+                        <li>Otimizações recorrentes</li>
+                        <li>Relatório de desempenho</li>
+                    </ul>
+                    <a class="btn" href="#contato">Quero este plano</a>
+                </article>
+
+                <article class="plan featured">
+                    <div class="tag">Mais completo</div>
+                    <div class="plan-name">Plano 02</div>
+                    <div class="price">R$ 2.500 <small>/ mês</small></div>
+                    <p class="plan-desc">Mídia paga + estratégia de conteúdo para fortalecer a presença local e gerar
+                        demanda para as duas unidades.</p>
+                    <ul>
+                        <li>Tudo do Plano 01</li>
+                        <li>Planejamento de crescimento orgânico</li>
+                        <li>Estratégia de conteúdo</li>
+                        <li>Calendário editorial</li>
+                        <li>Direcionamento de posicionamento</li>
+                        <li>Análise de oportunidades orgânicas</li>
+                        <li>Reunião estratégica periódica</li>
+                    </ul>
+                    <a class="btn" href="#contato">Quero este plano</a>
+                </article>
+
+                <article class="plan">
+                    <div class="plan-name">Plano 03</div>
+                    <div class="price">R$ 3.000 <small>/ mês</small></div>
+                    <p class="plan-desc">A operação mais completa para as duas unidades: aquisição, estratégia, landing
+                        page e produção de criativos.</p>
+                    <ul>
+                        <li>Tudo do Plano 02</li>
+                        <li>Landing page estratégica</li>
+                        <li>Otimização da experiência de conversão</li>
+                        <li>Edição de até 3 criativos em vídeo por mês</li>
+                        <li>Ou criação de até 4 artes estáticas por mês</li>
+                        <li>Direcionamento dos conteúdos em vídeo</li>
+                        <li>Estratégia integrada de aquisição</li>
+                        <li>Acompanhamento e otimização</li>
+                    </ul>
+                    <a class="btn" href="#contato">Quero este plano</a>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap">
+            <div class="section-head">
+                <h2>O que muda<br>entre os planos?</h2>
+                <p>Uma visão objetiva do nível de estrutura incluído em cada modalidade.</p>
+            </div>
+            <div class="comparison">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Entrega</th>
+                            <th>R$ 1.500</th>
+                            <th>R$ 2.500</th>
+                            <th>R$ 3.000</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Google Ads</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Meta Ads</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Otimização de campanhas</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Planejamento de crescimento orgânico</td>
+                            <td class="no">—</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Estratégia de conteúdo</td>
+                            <td class="no">—</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Landing page</td>
+                            <td class="no">—</td>
+                            <td class="no">—</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Edição de vídeos</td>
+                            <td class="no">—</td>
+                            <td class="no">—</td>
+                            <td class="yes">3 vídeos ou 4 artes/mês</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap">
+            <div class="section-head">
+                <h2>Como vamos<br>trabalhar.</h2>
+                <p>Uma operação contínua, com ciclos de análise, execução e otimização.</p>
+            </div>
+            <div class="process">
+                <div class="step"><b>01</b>
+                    <h3>Diagnóstico</h3>
+                    <p>Entendimento das duas unidades, procedimentos prioritários, público, diferenciais, ticket médio,
+                        regiões e cenário atual.</p>
+                </div>
+                <div class="step"><b>02</b>
+                    <h3>Estratégia</h3>
+                    <p>Definição das campanhas, ofertas, mensagens, canais e prioridades por unidade e procedimento.</p>
+                </div>
+                <div class="step"><b>03</b>
+                    <h3>Execução</h3>
+                    <p>Campanhas, conteúdos, páginas e ativos colocados em operação para as duas unidades.</p>
+                </div>
+                <div class="step"><b>04</b>
+                    <h3>Otimização</h3>
+                    <p>Leitura dos dados por unidade e ajustes para melhorar geração de leads, agendamentos,
+                        comparecimento e eficiência das campanhas.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="contato" class="final">
+        <div class="wrap">
+            <div class="eyebrow">Próximo passo</div>
+            <h2>Vamos transformar marketing em uma operação de crescimento para as duas unidades MyLash.</h2>
+            <p>
+                Escolha o plano que faz sentido para o momento da clínica e vamos alinhar
+                objetivos, prioridades e próximos passos.
+            </p>
+            <a class="btn" href="mailto:contato@agenciabrandcast.com.br">Falar sobre a gestão das unidades →</a>
+        </div>
+    </section>
+
+    <footer>
+        <div class="wrap">Proposta comercial • Gestão de Marketing MyLash • Valores referentes à prestação de serviços
+            para 2 unidades.</div>
+    </footer>
+
+</body>
+
+</html>

@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import numbers as numbers_service
 from app import settings_store
 from app.firing import already_fired, fire_event
-from app.ingest import link_prospect, upsert_contact
+from app.ingest import link_prospect, merge_attribution, upsert_contact
 from app.models import Contact, KeywordRule, Message, WaNumber, WebhookLog
 from app.services import rules as rules_engine
 from app.tracking import extract
@@ -117,25 +117,84 @@ def text_of(message: dict) -> str | None:
     return f"[{kind}]" if kind else None
 
 
+def _find_all(node, wanted: str, depth: int = 0):
+    """Todos os valores de `wanted` no objeto, em qualquer profundidade."""
+    if depth > 8:
+        return
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == wanted:
+                yield value
+            yield from _find_all(value, wanted, depth + 1)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _find_all(value, wanted, depth + 1)
+
+
+def _clid_of(block: dict) -> str | None:
+    value = block.get("ctwaClid") or block.get("ctwa_clid")
+    return str(value) if value else None
+
+
 def ad_referral(message: dict) -> dict | None:
     """Bloco do anuncio Click to WhatsApp, no formato que `tracking.extract` espera.
 
     A Evolution repassa o objeto do WhatsApp em camelCase (`ctwaClid`, `sourceUrl`),
     entao a traducao pro nome que o resto do sistema usa acontece aqui — um lugar so.
+
+    O bloco aparece em lugares diferentes conforme a versao e a origem do objeto:
+
+    * webhook de texto simples / `findMessages` da v2: `contextInfo` no MESMO nivel
+      de `message`, nao dentro dele (`data.contextInfo.externalAdReply`);
+    * texto estendido, imagem com legenda: `message.<tipo>.contextInfo.externalAdReply`;
+    * formato da Cloud API: `referral.ctwa_clid`.
+
+    Pode haver mais de um `externalAdReply` (mensagem citada, por exemplo); vale o
+    que traz o `ctwaClid`. Sem `externalAdReply` nenhum, um `ctwaClid` solto ou os
+    marcadores de conversao (`conversionSource: FB_Ads`, `entryPointConversionSource:
+    ctwa_ad`) ainda dizem que a conversa veio de anuncio.
     """
-    ad = _find_key(message, "externalAdReply")
-    if not isinstance(ad, dict):
+    blocks = [b for b in _find_all(message, "externalAdReply") if isinstance(b, dict)]
+    blocks += [b for b in _find_all(message, "referral") if isinstance(b, dict)]
+    ad = next((b for b in blocks if _clid_of(b)), blocks[0] if blocks else None)
+
+    clid = _clid_of(ad) if ad else None
+    if not clid:
+        loose = next((v for v in _find_all(message, "ctwaClid") if v), None)
+        clid = str(loose) if loose else None
+
+    from_ad = str(_find_key(message, "conversionSource") or "").lower() == "fb_ads" or str(
+        _find_key(message, "entryPointConversionSource") or ""
+    ).lower() == "ctwa_ad"
+
+    if ad is None and not clid and not from_ad:
         return None
 
-    clid = ad.get("ctwaClid") or ad.get("ctwa_clid") or _find_key(message, "ctwaClid")
+    ad = ad or {}
     return {
-        "ctwa_clid": str(clid) if clid else None,
+        "ctwa_clid": clid,
         "source_id": ad.get("sourceId") or ad.get("source_id"),
         "source_type": ad.get("sourceType") or ad.get("source_type") or "ad",
         "source_url": ad.get("sourceUrl") or ad.get("source_url"),
         "headline": ad.get("title") or ad.get("headline"),
         "body": ad.get("body"),
     }
+
+
+def apply_ad_attribution(contact: Contact, message: dict) -> bool:
+    """Completa a atribuicao do contato a partir de um objeto de mensagem cru.
+
+    E o que o sync de historico usa: la nao ha `upsert_contact` com atribuicao, e
+    sem isso o lead que entrou por "sincronizar" ficava sem o `ctwaClid` que estava
+    ali no `raw`. So mensagem do cliente conta — o anuncio nunca vem no `fromMe`.
+    Devolve True se o contato ganhou o `ctwa_clid` agora.
+    """
+    if not isinstance(message, dict) or is_from_me(message):
+        return False
+    referral = ad_referral(message)
+    if referral is None:
+        return False
+    return merge_attribution(contact, extract(referral, text_of(message)))
 
 
 def _digits_of_jid(jid: str | None) -> str | None:

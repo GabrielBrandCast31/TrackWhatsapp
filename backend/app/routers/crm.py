@@ -189,6 +189,62 @@ async def pipeline(
     }
 
 
+@router.get("/activity")
+async def activity(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    """Cursor barato de mudanca — e o que faz a tela do CRM se atualizar sozinha.
+
+    A tela pergunta por isto de poucos em poucos segundos. Enquanto o `cursor`
+    for o mesmo, nada mudou e nada e recarregado; quando muda (mensagem nova,
+    conversa nova, etapa movida, lida/nao lida, conversao disparada) a tela
+    refaz as consultas pesadas. Sao cinco agregacoes em coluna indexada: barato
+    o bastante pra rodar a cada poucos segundos com a tela aberta o dia todo.
+    """
+
+    def scoped(stmt):
+        return stmt if number_id is None else stmt.where(Contact.wa_number_id == number_id)
+
+    contacts = (await session.execute(scoped(select(func.count(Contact.id))))).scalar_one()
+    # `last_seen_at` tem onupdate: qualquer mexida na conversa (etapa, nota,
+    # marcar como lida, mensagem nova) empurra esse relogio pra frente.
+    touched = (await session.execute(scoped(select(func.max(Contact.last_seen_at))))).scalar_one()
+    unread = (
+        await session.execute(scoped(select(func.coalesce(func.sum(Contact.unread_count), 0))))
+    ).scalar_one()
+
+    msg_stmt = select(func.count(Message.id), func.max(Message.id))
+    if number_id is not None:
+        msg_stmt = msg_stmt.join(Contact, Message.contact_id == Contact.id).where(
+            Contact.wa_number_id == number_id
+        )
+    messages, last_message_id = (await session.execute(msg_stmt)).one()
+
+    conv_stmt = select(func.count(Conversion.id))
+    if number_id is not None:
+        conv_stmt = conv_stmt.join(Contact, Conversion.contact_id == Contact.id).where(
+            Contact.wa_number_id == number_id
+        )
+    conversions = (await session.execute(conv_stmt)).scalar_one()
+
+    # o SQLite devolve datas agregadas ora como datetime, ora como texto — pro
+    # cursor tanto faz, desde que seja sempre a mesma forma pra mesma data
+    stamp = touched.isoformat() if hasattr(touched, "isoformat") else str(touched or "-")
+
+    return {
+        "contacts": contacts,
+        "messages": messages,
+        "last_message_id": last_message_id or 0,
+        "unread": int(unread or 0),
+        "conversions": conversions,
+        "last_activity_at": touched,
+        # a tela compara so isto: mudou a string, recarrega
+        "cursor": (
+            f"{contacts}:{messages}:{last_message_id or 0}:{int(unread or 0)}:{conversions}:{stamp}"
+        ),
+    }
+
+
 @router.get("/contacts/{contact_id}")
 async def get_contact(contact_id: int, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
