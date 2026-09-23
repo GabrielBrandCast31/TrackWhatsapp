@@ -63,6 +63,24 @@ export function MessagePayloadToggle({ messageId }: { messageId: number }) {
                 {data.wamid && <span className="break-all">{data.wamid}</span>}
               </div>
 
+              {data.ad && (
+                // o que decide a atribuicao: se aparece aqui, o lead tem que estar atribuido
+                <div className="space-y-1 rounded-md border border-ink-800 p-2 font-mono text-[11px] text-ink-400">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={data.ad.ctwa_clid && !data.ad_ignored_from_me ? 'good' : 'warn'}>
+                      {data.ad_ignored_from_me
+                        ? 'anúncio ignorado (mensagem da própria linha)'
+                        : data.ad.ctwa_clid
+                          ? 'ctwa_clid lido'
+                          : 'anúncio sem ctwa_clid'}
+                    </Badge>
+                    {data.ad.source_id && <span>anúncio {data.ad.source_id}</span>}
+                  </div>
+                  {data.ad.headline && <div className="text-ink-300">{data.ad.headline}</div>}
+                  {data.ad.ctwa_clid && <div className="break-all">{data.ad.ctwa_clid}</div>}
+                </div>
+              )}
+
               <div>
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="text-[11px] font-medium text-ink-300">Mensagem (objeto cru)</span>

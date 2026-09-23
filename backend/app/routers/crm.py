@@ -21,6 +21,7 @@ from app import crm as crm_service
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
+from app.evolution_ingest import ad_referral, apply_ad_attribution, is_from_me
 from app.models import CONTACT_STAGES, Contact, Conversion, Message, WaNumber, WebhookLog
 from app.services import evolution
 
@@ -263,6 +264,17 @@ async def get_contact(contact_id: int, session: AsyncSession = Depends(get_sessi
         .scalars()
         .all()
     )
+
+    if not contact.ctwa_clid:
+        # Confere o payload de cada mensagem gravada. O `externalAdReply` pode ter
+        # entrado por um caminho que nao olhava o anuncio (sync antigo, historico
+        # puxado antes da correcao); se esta no `raw` que a tela mostra, o lead
+        # tem que sair daqui atribuido — nao na proxima rodada do sync.
+        if any(apply_ad_attribution(contact, m.raw or {}) for m in msgs):
+            log.info("contato %s: ctwa_clid achado no payload de uma mensagem gravada", contact.id)
+            await session.commit()
+            await session.refresh(contact)
+
     convs = (
         (
             await session.execute(
@@ -333,6 +345,11 @@ async def message_payload(message_id: int, session: AsyncSession = Depends(get_s
         "body": message.body,
         "sent_at": message.sent_at,
         "raw": message.raw or {},
+        # o que o sistema le do anuncio nesse payload — e o que decide a atribuicao.
+        # `ignored_from_me`: bloco de anuncio em mensagem enviada pela propria linha
+        # nao conta (e o aparelho clicando no anuncio de outra empresa).
+        "ad": ad_referral(message.raw or {}),
+        "ad_ignored_from_me": bool(message.raw) and is_from_me(message.raw),
         "webhook": None
         if log_row is None
         else {

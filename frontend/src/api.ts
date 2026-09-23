@@ -574,6 +574,15 @@ export type MessagePayload = {
   body: string | null
   sent_at: string
   raw: Record<string, unknown>
+  /** O que o sistema lê do anúncio nesse payload (null = nenhum bloco de anúncio). */
+  ad?: {
+    ctwa_clid: string | null
+    source_id: string | null
+    source_url: string | null
+    headline: string | null
+  } | null
+  /** Bloco de anúncio em mensagem enviada pela própria linha: não conta. */
+  ad_ignored_from_me?: boolean
   webhook: {
     id: number
     summary: string | null
