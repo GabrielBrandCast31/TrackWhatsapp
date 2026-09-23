@@ -38,7 +38,7 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:3031")
 EVOLUTION_CALLBACK_BASE_URL = os.getenv("EVOLUTION_CALLBACK_BASE_URL", "").strip()
 
 # campos do destino Meta que a linha guarda em `overrides`
-META_FIELDS = ("meta_dataset_id", "meta_capi_token", "meta_test_event_code")
+META_FIELDS = ("meta_dataset_id", "meta_capi_token", "meta_test_event_code", "meta_page_id", "meta_waba_id")
 
 
 def _webhook_path(number: WaNumber) -> str:
@@ -85,6 +85,8 @@ def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = N
         "api_key__hint": f"...{number.evo_api_key[-4:]}" if (number.evo_api_key or "") else "",
         "meta_dataset_id": overrides.get("meta_dataset_id") or "",
         "meta_test_event_code": overrides.get("meta_test_event_code") or "",
+        "meta_page_id": overrides.get("meta_page_id") or "",
+        "meta_waba_id": overrides.get("meta_waba_id") or "",
         "meta_capi_token__set": bool(token),
         "meta_capi_token__hint": f"...{token[-4:]}" if len(token) >= 4 else "",
         "enabled_destinations": enabled_destinations(cfg) if cfg else [],
@@ -100,6 +102,8 @@ class InstanceIn(BaseModel):
     meta_dataset_id: str | None = None
     meta_capi_token: str | None = None
     meta_test_event_code: str | None = None
+    meta_page_id: str | None = None
+    meta_waba_id: str | None = None
     note: str | None = None
     active: bool = True
     is_default: bool = False
@@ -116,6 +120,8 @@ class InstancePatch(BaseModel):
     meta_dataset_id: str | None = None
     meta_capi_token: str | None = None
     meta_test_event_code: str | None = None
+    meta_page_id: str | None = None
+    meta_waba_id: str | None = None
     note: str | None = None
     active: bool | None = None
     is_default: bool | None = None

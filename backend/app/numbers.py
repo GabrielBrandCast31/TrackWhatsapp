@@ -51,6 +51,8 @@ OVERRIDABLE = (
     "meta_dataset_id",
     "meta_capi_token",
     "meta_test_event_code",
+    "meta_page_id",
+    "meta_waba_id",
     "google_ads_enabled",
     "google_customer_id",
     "google_login_customer_id",

@@ -38,8 +38,7 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion) -> dict:
         event_id=conv.event_id,
         ctwa_clid=contact.ctwa_clid,
         phone=contact.phone_e164 or to_e164(contact.wa_id),
-        # so a linha Cloud API tem WABA; linha da Evolution deixa o campo de fora
-        waba_id=cfg.get("wa_business_account_id"),
+        **meta_capi.business_ids(cfg),
         value=conv.value,
         currency=conv.currency,
         event_time=int(conv.created_at.timestamp()),
@@ -50,6 +49,12 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion) -> dict:
         raise meta_capi.CapiError(
             "Contato sem ctwa_clid — o Meta nao consegue atribuir esse evento a uma campanha. "
             "Use um lead vindo de anuncio Click to WhatsApp (ou o simulador)."
+        )
+    user_data = payload["data"][0]["user_data"]
+    if not (user_data.get("page_id") or user_data.get("whatsapp_business_account_id")):
+        raise meta_capi.CapiError(
+            "Linha sem Page ID nem WABA ID — o Meta exige um dos dois em evento do WhatsApp. "
+            "Preencha o Page ID da página que roda os anúncios em Rastreamento > Meta."
         )
     return payload
 

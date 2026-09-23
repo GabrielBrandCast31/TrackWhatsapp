@@ -43,6 +43,11 @@ DEFAULTS: dict = {
     "meta_dataset_id": os.getenv("META_DATASET_ID", ""),   # Pixel ID ou Dataset ID
     "meta_capi_token": os.getenv("META_CAPI_TOKEN", ""),
     "meta_test_event_code": os.getenv("META_TEST_EVENT_CODE", ""),
+    # evento `business_messaging` exige em user_data o `page_id` OU o
+    # `whatsapp_business_account_id` ligado ao dataset. Linha da Evolution (app
+    # WhatsApp Business) nao tem WABA de Cloud API: quase sempre e o Page ID.
+    "meta_page_id": os.getenv("META_PAGE_ID", ""),
+    "meta_waba_id": os.getenv("META_WABA_ID", ""),
     # --- Google Ads offline conversions ---
     "google_ads_enabled": False,
     "google_customer_id": os.getenv("GOOGLE_CUSTOMER_ID", ""),          # sem tracos

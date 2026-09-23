@@ -5,12 +5,18 @@ Para conversa vinda de Click to WhatsApp o evento tem uma forma especifica:
   action_source     = "business_messaging"
   messaging_channel = "whatsapp"
   user_data.ctwa_clid = <clid que veio no referral do webhook>   # NAO hasheado
-  user_data.whatsapp_business_account_id = <waba_id da linha>
+  user_data.whatsapp_business_account_id = <waba_id da linha>   # OU
+  user_data.page_id = <pagina do Facebook ligada ao dataset>
 
 O ctwa_clid e o que amarra a conversa de volta ao anuncio. O waba_id diz a qual
 conta do WhatsApp Business aquele clique pertence — a Meta pede os dois juntos
 no evento de Click to WhatsApp, e o dataset de destino tem que ser o da propria
-WABA (`POST /{WABA_ID}/dataset`), nao um pixel de site. Telefone e email, quando
+WABA (`POST /{WABA_ID}/dataset`), nao um pixel de site.
+
+Sem um dos dois (`page_id` ou `whatsapp_business_account_id`) a Meta recusa o
+evento com code 100 / subcode 2804116. Linha da Evolution usa o app WhatsApp
+Business, sem WABA de Cloud API: ai o que vale e o Page ID da pagina que roda
+os anuncios e esta ligada ao dataset. Telefone e email, quando
 presentes, vao hasheados em SHA-256 (normalizados antes).
 """
 
@@ -52,6 +58,7 @@ def build_payload(
     ctwa_clid: str | None,
     phone: str | None,
     waba_id: str | None = None,
+    page_id: str | None = None,
     email: str | None = None,
     value: float | None = None,
     currency: str = "BRL",
@@ -62,8 +69,12 @@ def build_payload(
     user_data: dict = {}
     if ctwa_clid:
         user_data["ctwa_clid"] = ctwa_clid
-    if waba_id:
-        user_data["whatsapp_business_account_id"] = str(waba_id)
+    # um so: a Meta pede "o que estiver vinculado ao dataset", e mandar um id que
+    # nao esta ligado a ele pode fazer o evento ser recusado
+    if page_id:
+        user_data["page_id"] = str(page_id).strip()
+    elif waba_id:
+        user_data["whatsapp_business_account_id"] = str(waba_id).strip()
     hashed_phone = hash_phone(phone)
     if hashed_phone:
         user_data["ph"] = [hashed_phone]
@@ -91,6 +102,18 @@ def build_payload(
     if test_event_code:
         payload["test_event_code"] = test_event_code
     return payload
+
+
+def business_ids(cfg: dict) -> dict:
+    """`page_id` / `waba_id` da linha, na forma que `build_payload` recebe.
+
+    Page ID configurado vence; WABA vem do campo proprio ou, na linha Cloud API,
+    da credencial da linha.
+    """
+    return {
+        "page_id": (cfg.get("meta_page_id") or "").strip() or None,
+        "waba_id": (cfg.get("meta_waba_id") or cfg.get("wa_business_account_id") or "").strip() or None,
+    }
 
 
 async def send(cfg: dict, payload: dict) -> tuple[int, dict]:

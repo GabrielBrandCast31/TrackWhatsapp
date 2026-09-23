@@ -77,6 +77,8 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
     meta_dataset_id: instance.meta_dataset_id,
     meta_capi_token: '',
     meta_test_event_code: instance.meta_test_event_code,
+    meta_page_id: instance.meta_page_id ?? '',
+    meta_waba_id: instance.meta_waba_id ?? '',
   })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
@@ -86,10 +88,14 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
       meta_dataset_id: instance.meta_dataset_id,
       meta_capi_token: '',
       meta_test_event_code: instance.meta_test_event_code,
+      meta_page_id: instance.meta_page_id ?? '',
+      meta_waba_id: instance.meta_waba_id ?? '',
     })
-  }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code])
+  }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code, instance.meta_page_id, instance.meta_waba_id])
 
-  const ready = Boolean(instance.meta_dataset_id) && instance.meta_capi_token__set
+  // o evento do WhatsApp e recusado sem Page ID ou WABA (code 100 / subcode 2804116)
+  const hasBusinessId = Boolean(instance.meta_page_id || instance.meta_waba_id)
+  const ready = Boolean(instance.meta_dataset_id) && instance.meta_capi_token__set && hasBusinessId
 
   return (
     <Card
@@ -130,6 +136,36 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
           </Field>
         </div>
 
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field
+            label="Page ID"
+            hint="Página do Facebook que roda os anúncios e está ligada ao dataset. Configurações da página → Transparência da página, ou business.facebook.com → Contas → Páginas."
+          >
+            <Input
+              value={draft.meta_page_id}
+              placeholder="102345678901234"
+              onChange={(e) => setDraft({ ...draft, meta_page_id: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="WhatsApp Business Account ID (opcional)"
+            hint="Só se o dataset estiver ligado a uma WABA em vez da página. Com Page ID preenchido, este fica de fora."
+          >
+            <Input
+              value={draft.meta_waba_id}
+              placeholder="109876543210987"
+              onChange={(e) => setDraft({ ...draft, meta_waba_id: e.target.value })}
+            />
+          </Field>
+        </div>
+
+        {!hasBusinessId && (
+          <Banner tone="warn">
+            Sem Page ID nem WABA o Meta recusa o evento do WhatsApp (“não tem page_id nem
+            whatsapp_business_account_id”). Preencha o Page ID da página que roda os anúncios.
+          </Banner>
+        )}
+
         {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
 
         <div className="flex items-center gap-3">
@@ -142,7 +178,7 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
               try {
                 await evolutionApi.patch(instance.id, draft)
                 await onSaved()
-                setMsg({ tone: 'good', text: 'Pixel e token salvos para esta linha.' })
+                setMsg({ tone: 'good', text: 'Destino Meta salvo para esta linha.' })
               } catch (e) {
                 setMsg({ tone: 'bad', text: (e as Error).message })
               } finally {

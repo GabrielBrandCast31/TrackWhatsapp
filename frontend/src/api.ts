@@ -688,6 +688,8 @@ export type EvoInstance = {
   api_key__hint: string
   meta_dataset_id: string
   meta_test_event_code: string
+  meta_page_id: string
+  meta_waba_id: string
   meta_capi_token__set: boolean
   meta_capi_token__hint: string
   enabled_destinations: string[]

@@ -189,7 +189,7 @@ async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depe
             event_id=event_id,
             ctwa_clid=contact.ctwa_clid,
             phone=contact.phone_e164 or to_e164(contact.wa_id),
-            waba_id=cfg.get("wa_business_account_id"),
+            **meta_capi.business_ids(cfg),
             value=payload.value,
             currency=currency,
             test_event_code=(cfg.get("meta_test_event_code") or None) if payload.is_test else None,
