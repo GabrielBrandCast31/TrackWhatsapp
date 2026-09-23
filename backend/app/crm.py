@@ -16,8 +16,9 @@ marcar o momento em que o atendimento acontece; reprocessar meses de conversa
 antiga mandaria uma enxurrada de eventos falsos pro Meta.
 """
 
+import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -282,8 +283,65 @@ async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict)
         contact.synced_at = now
 
     result["attributed"] += await backfill_attribution(session, number.id)
+    result["attributed"] += await probe_ad_attribution(session, number, cfg)
     await session.commit()
     return result
+
+
+def _jid_of_contact(contact: Contact) -> str:
+    # conversa migrada e indexada pelo LID na Evolution: pedir o historico por
+    # `<telefone>@s.whatsapp.net` volta vazio.
+    return f"{contact.wa_lid}@lid" if contact.wa_lid else f"{contact.wa_id}@s.whatsapp.net"
+
+
+# janela e teto da busca do anuncio no "sincronizar". O ctwa_clid so vale pra
+# atribuicao por poucos dias, entao conversa parada ha mais de um mes nao compensa
+# as chamadas; o teto segura instancia com milhares de conversas.
+PROBE_DAYS = 30
+PROBE_MAX = 300
+PROBE_CONCURRENCY = 6
+
+
+async def probe_ad_attribution(
+    session: AsyncSession, number: WaNumber, cfg: dict, days: int = PROBE_DAYS, limit: int = PROBE_MAX
+) -> int:
+    """Busca na Evolution a PRIMEIRA mensagem das conversas recentes sem `ctwa_clid`.
+
+    O sync so enxerga a ultima mensagem de cada conversa, e o anuncio vem sempre
+    na primeira. Sem isto, lead que entrou por "sincronizar" (ou cujo webhook se
+    perdeu) nunca era atribuido, mesmo com o `ctwaClid` guardado na Evolution.
+    As chamadas HTTP correm em paralelo; a escrita no contato e sequencial.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    stmt = (
+        select(Contact)
+        .where(Contact.wa_number_id == number.id)
+        .where(Contact.ctwa_clid.is_(None))
+        .where(Contact.last_message_at >= since)
+        .order_by(Contact.last_message_at.desc())
+        .limit(limit)
+    )
+    contacts = list((await session.execute(stmt)).scalars().all())
+    if not contacts:
+        return 0
+
+    gate = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def first_of(contact: Contact) -> list[dict]:
+        async with gate:
+            try:
+                return await evolution.find_first_messages(cfg, _jid_of_contact(contact))
+            except Exception as exc:  # noqa: BLE001 — uma conversa nao derruba o sync
+                log.warning("contato %s: nao deu pra buscar a primeira mensagem: %s", contact.id, exc)
+                return []
+
+    batches = await asyncio.gather(*(first_of(c) for c in contacts))
+    fixed = 0
+    for contact, rows in zip(contacts, batches):
+        if any(apply_ad_attribution(contact, row) for row in rows):
+            fixed += 1
+            log.info("contato %s: ctwa_clid achado na primeira mensagem da conversa", contact.id)
+    return fixed
 
 
 async def backfill_attribution(session: AsyncSession, wa_number_id: int | None = None) -> int:
@@ -319,10 +377,19 @@ async def sync_messages(
     session: AsyncSession, number: WaNumber, cfg: dict, contact: Contact, limit: int = 60
 ) -> dict:
     """Historico de uma conversa. NAO avalia regra: ver o docstring do modulo."""
-    # conversa migrada e indexada pelo LID na Evolution: pedir o historico por
-    # `<telefone>@s.whatsapp.net` volta vazio, e o chat abriria em branco.
-    jid = f"{contact.wa_lid}@lid" if contact.wa_lid else f"{contact.wa_id}@s.whatsapp.net"
+    jid = _jid_of_contact(contact)
     rows = await evolution.find_messages(cfg, jid, limit=limit)
+
+    if not contact.ctwa_clid:
+        # o anuncio vem na PRIMEIRA mensagem, que numa conversa longa fica fora
+        # das `limit` mais recentes. Busca o comeco da conversa tambem.
+        try:
+            head = await evolution.find_first_messages(cfg, jid)
+        except evolution.EvolutionError as exc:
+            log.warning("contato %s: nao deu pra buscar a primeira mensagem: %s", contact.id, exc)
+            head = []
+        seen = {str((r.get("key") or {}).get("id")) for r in rows if isinstance(r.get("key"), dict)}
+        rows += [r for r in head if str((r.get("key") or {}).get("id")) not in seen]
 
     known = set(
         (

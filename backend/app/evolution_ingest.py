@@ -413,7 +413,9 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
             from_me = is_from_me(message)
             direction = "attendant" if from_me else "customer"
             text = text_of(message)
-            referral = ad_referral(message)
+            # o anuncio so conta na mensagem do cliente: bloco de anuncio num
+            # `fromMe` e o proprio aparelho clicando no anuncio de outra empresa.
+            referral = None if from_me else ad_referral(message)
             attribution = extract(referral, None if from_me else text)
 
             contact, created = await upsert_contact(

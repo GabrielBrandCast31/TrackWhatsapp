@@ -364,6 +364,41 @@ async def find_messages(cfg: dict, remote_jid: str, limit: int = 60) -> list[dic
     return _rows(body)
 
 
+def _page_count(body: Any) -> int | None:
+    """`pages` da resposta paginada da v2 (`{"messages": {"pages": n, ...}}`)."""
+    if not isinstance(body, dict):
+        return None
+    inner = body.get("messages") if isinstance(body.get("messages"), dict) else body
+    pages = inner.get("pages")
+    return pages if isinstance(pages, int) else None
+
+
+async def find_first_messages(cfg: dict, remote_jid: str, count: int = 6) -> list[dict]:
+    """As mensagens MAIS ANTIGAS de uma conversa — e onde mora o anuncio.
+
+    O bloco do Click to WhatsApp (`externalAdReply` com o `ctwaClid`) so vem na
+    primeira mensagem depois do clique. A v2 pagina do mais novo pro mais antigo
+    (o `offset` e o tamanho da pagina), entao a primeira mensagem esta na ULTIMA
+    pagina. Pega-se `count` e nao 1 porque a saudacao automatica do anuncio pode
+    chegar alguns segundos antes da mensagem do cliente.
+    """
+    where = {"key": {"remoteJid": remote_jid}}
+    path = f"/chat/findMessages/{_instance(cfg)}"
+    first = await _post_or_get(cfg, path, {"where": where, "page": 1, "offset": count, "limit": count})
+    rows = _rows(first)
+    pages = _page_count(first)
+    if not pages or pages <= 1:
+        return rows  # conversa curta (ou versao sem paginacao): ja veio tudo
+
+    last = _rows(await _post_or_get(cfg, path, {"where": where, "page": pages, "offset": count, "limit": count}))
+    if len(last) < count and pages - 1 > 1:
+        # ultima pagina curta: completa com a anterior pra ter `count` mensagens
+        last += _rows(
+            await _post_or_get(cfg, path, {"where": where, "page": pages - 1, "offset": count, "limit": count})
+        )
+    return last
+
+
 async def profile_picture(cfg: dict, number: str) -> str | None:
     try:
         body = await _request(
