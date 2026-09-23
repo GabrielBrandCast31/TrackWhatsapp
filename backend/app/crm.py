@@ -186,8 +186,18 @@ async def _upsert(
     return contact, True
 
 
+# Um sync por linha de cada vez. O automatico (`auto_sync`) e o botao podem cair
+# juntos, e duas rodadas simultaneas criariam o mesmo contato duas vezes.
+_sync_locks: dict[int, asyncio.Lock] = {}
+
+
 async def sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict) -> dict:
     """Puxa contatos e conversas da instancia. Devolve o que entrou e o que falhou."""
+    async with _sync_locks.setdefault(number.id, asyncio.Lock()):
+        return await _sync_from_instance(session, number, cfg)
+
+
+async def _sync_from_instance(session: AsyncSession, number: WaNumber, cfg: dict) -> dict:
     result: dict = {
         "chats": 0,
         "contacts": 0,
@@ -301,6 +311,11 @@ PROBE_DAYS = 30
 PROBE_MAX = 300
 PROBE_CONCURRENCY = 6
 
+# Conversas cujo comeco ja foi lido nesta execucao. A primeira mensagem nao muda,
+# entao reler a cada rodada do sync automatico so gastaria chamada na Evolution.
+# Fica em memoria: um restart relê uma vez, o que e barato.
+_probed: set[int] = set()
+
 
 async def probe_ad_attribution(
     session: AsyncSession, number: WaNumber, cfg: dict, days: int = PROBE_DAYS, limit: int = PROBE_MAX
@@ -319,9 +334,8 @@ async def probe_ad_attribution(
         .where(Contact.ctwa_clid.is_(None))
         .where(Contact.last_message_at >= since)
         .order_by(Contact.last_message_at.desc())
-        .limit(limit)
     )
-    contacts = list((await session.execute(stmt)).scalars().all())
+    contacts = [c for c in (await session.execute(stmt)).scalars().all() if c.id not in _probed][:limit]
     if not contacts:
         return 0
 
@@ -330,10 +344,13 @@ async def probe_ad_attribution(
     async def first_of(contact: Contact) -> list[dict]:
         async with gate:
             try:
-                return await evolution.find_first_messages(cfg, _jid_of_contact(contact))
+                rows = await evolution.find_first_messages(cfg, _jid_of_contact(contact))
             except Exception as exc:  # noqa: BLE001 — uma conversa nao derruba o sync
+                # nao marca como lida: a proxima rodada tenta de novo
                 log.warning("contato %s: nao deu pra buscar a primeira mensagem: %s", contact.id, exc)
                 return []
+            _probed.add(contact.id)
+            return rows
 
     batches = await asyncio.gather(*(first_of(c) for c in contacts))
     fixed = 0

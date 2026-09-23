@@ -28,7 +28,7 @@ from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
-from app import auth
+from app import auth, auto_sync
 from app import numbers as numbers_service
 from app import state_watch
 from app.db import SessionLocal, init_db
@@ -103,13 +103,17 @@ async def on_startup() -> None:
     # sessao caiu se um webhook chegar — e webhook nenhum chega justamente quando
     # ela cai. Guardado no app pra nao virar task orfa no shutdown.
     app.state.state_watcher = asyncio.create_task(state_watch.watch_states())
+    # CRM e atribuicao sem depender do webhook: puxa conversa nova e acha o
+    # anuncio na primeira mensagem, de tempos em tempos (veja app.auto_sync)
+    app.state.auto_sync = asyncio.create_task(auto_sync.watch())
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    watcher = getattr(app.state, "state_watcher", None)
-    if watcher is not None:
-        watcher.cancel()
+    for name in ("state_watcher", "auto_sync"):
+        task = getattr(app.state, name, None)
+        if task is not None:
+            task.cancel()
 
 
 @app.get("/api/health")
