@@ -1274,8 +1274,12 @@ export type ContactAttendance = {
 
 export type AiConfig = {
   configured: boolean
+  /** quem analisa: Claude (chave da Anthropic) ou, sem ela, o Gemini do .env */
+  provider: 'claude' | 'gemini' | null
+  anthropic_configured: boolean
+  gemini_configured: boolean
   key_hint: string
-  model: string
+  model: string | null
   effort: string
   auto_apply_stage: boolean
   criteria: { key: string; label: string }[]

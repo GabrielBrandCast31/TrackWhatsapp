@@ -187,6 +187,33 @@ async def _call(api_key: str, user_content: str) -> tuple[dict, dict]:
     return json.loads(text), usage
 
 
+def provider(api_key: str) -> str | None:
+    """Qual IA analisa: Claude com a chave da Anthropic; sem ela, o Gemini do .env."""
+    from app import form_ai
+
+    if api_key:
+        return "claude"
+    if form_ai.is_available():
+        return "gemini"
+    return None
+
+
+async def _call_gemini(user_content: str) -> tuple[dict, dict]:
+    """Mesma analise pelo Gemini. Ele nao aceita este schema como restricao, entao
+    o schema vai no prompt e a resposta passa pela mesma limpeza da do Claude."""
+    from app import form_ai
+
+    prompt = (
+        f"{user_content}\n\nResponda APENAS com um objeto JSON que siga exatamente este "
+        f"JSON Schema (sem texto fora do JSON):\n{json.dumps(SCHEMA, ensure_ascii=False)}"
+    )
+    text = await form_ai.generate_text(prompt, SYSTEM)
+    data = form_ai._parse_json_object(text)
+    if not data or not data.get("summary"):
+        raise RuntimeError("o Gemini não devolveu a análise no formato esperado")
+    return data, {"model": form_ai.GEMINI_MODEL}
+
+
 def _error_message(exc: Exception) -> str:
     if isinstance(exc, anthropic.AuthenticationError):
         return "Chave da API da Anthropic inválida."
@@ -234,8 +261,9 @@ async def analyze(
         row.status, row.error = "error", "Conversa curta demais para analisar."
         await session.commit()
         return row
-    if not api_key:
-        row.status, row.error = "error", "Configure a chave da API da Anthropic em Atendimento → IA."
+    which = provider(api_key)
+    if which is None:
+        row.status, row.error = "error", "Nenhuma IA configurada: GEMINI_API_KEY no .env ou a chave da Anthropic em Atendimento → IA."
         await session.commit()
         return row
 
@@ -247,7 +275,7 @@ async def analyze(
     content = f"{header}\n<conversa>\n{transcript(contact, msgs)}\n</conversa>"
 
     try:
-        data, usage = await _call(api_key, content)
+        data, usage = await (_call(api_key, content) if which == "claude" else _call_gemini(content))
     except Exception as exc:  # noqa: BLE001 — qualquer falha vira analise com erro visivel na tela
         log.warning("analise da conversa %s falhou: %s", contact.id, exc)
         row.status, row.error = "error", _error_message(exc)

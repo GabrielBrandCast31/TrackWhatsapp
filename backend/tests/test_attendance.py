@@ -14,6 +14,8 @@ from types import SimpleNamespace
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{pathlib.Path(tempfile.mkdtemp()) / 'attendance.db'}"
+# sem Gemini: o teste de "nenhuma IA" nao pode cair na chave real do .env
+os.environ["GEMINI_API_KEY"] = ""
 
 from httpx import ASGITransport, AsyncClient
 

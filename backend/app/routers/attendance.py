@@ -167,10 +167,17 @@ async def _ai_cfg(session: AsyncSession) -> dict:
 async def ai_config(session: AsyncSession = Depends(get_session)):
     cfg = await _ai_cfg(session)
     key = cfg.get("anthropic_api_key") or ""
+    which = ai_analysis.provider(key)
+    from app import form_ai
+
     return {
-        "configured": bool(key),
+        # Claude quando ha chave da Anthropic; sem ela, o Gemini do .env
+        "configured": which is not None,
+        "provider": which,
+        "anthropic_configured": bool(key),
+        "gemini_configured": form_ai.is_available(),
         "key_hint": f"...{key[-4:]}" if len(key) >= 4 else "",
-        "model": ai_analysis.MODEL,
+        "model": ai_analysis.MODEL if which == "claude" else form_ai.GEMINI_MODEL if which == "gemini" else None,
         "effort": ai_analysis.EFFORT,
         "auto_apply_stage": bool(cfg.get("ai_auto_apply_stage")),
         "criteria": [{"key": k, "label": v} for k, v in ai_analysis.CRITERIA.items()],
@@ -326,8 +333,8 @@ async def analyze_batch(payload: BatchIn, session: AsyncSession = Depends(get_se
         raise HTTPException(status_code=409, detail="Já existe uma análise em lote rodando para essa linha.")
     cfg = await _ai_cfg(session)
     api_key = cfg.get("anthropic_api_key") or ""
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Configure a chave da API da Anthropic primeiro.")
+    if ai_analysis.provider(api_key) is None:
+        raise HTTPException(status_code=400, detail="Nenhuma IA configurada: GEMINI_API_KEY no .env ou a chave da Anthropic.")
     ids = await _candidates(session, payload.number_id, payload.limit, payload.only_stale)
     _jobs[key] = {
         "running": bool(ids),

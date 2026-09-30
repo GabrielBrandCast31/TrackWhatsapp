@@ -317,10 +317,12 @@ function AiSetup({ cfg, onSaved }: { cfg: AiConfig; onSaved: (c: AiConfig) => vo
   }
   return (
     <div className="flex flex-wrap items-center gap-3 text-[12px]">
-      {cfg.configured ? (
+      {cfg.provider === 'claude' ? (
         <Badge tone="good">Claude conectado · chave {cfg.key_hint}</Badge>
+      ) : cfg.provider === 'gemini' ? (
+        <Badge tone="good">Gemini conectado (GEMINI_API_KEY do .env)</Badge>
       ) : (
-        <Badge tone="warn">sem chave da API da Anthropic</Badge>
+        <Badge tone="warn">nenhuma IA configurada</Badge>
       )}
       <span className="text-ink-500">
         modelo <span className="font-mono text-ink-300">{cfg.model}</span>
@@ -330,7 +332,7 @@ function AiSetup({ cfg, onSaved }: { cfg: AiConfig; onSaved: (c: AiConfig) => vo
           <div className="w-64">
             <Input
               type="password"
-              placeholder={cfg.configured ? 'trocar chave (sk-ant-…)' : 'chave da API (sk-ant-…)'}
+              placeholder={cfg.anthropic_configured ? 'trocar chave da Anthropic (sk-ant-…)' : 'opcional: chave da Anthropic para usar o Claude'}
               value={key}
               onChange={(e) => setKey(e.target.value)}
             />
@@ -410,7 +412,7 @@ function AiSection({ numberId, days }: { numberId?: number; days: number }) {
     <div className="space-y-5">
       <Card
         title="Análise de atendimento com IA"
-        subtitle="O Claude lê cada conversa, dá nota ao atendimento, diz se o lead é MQL, em que etapa está, as objeções e a próxima ação"
+        subtitle="A IA lê cada conversa, dá nota ao atendimento, diz se o lead é MQL, em que etapa está, as objeções e a próxima ação"
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => void runBatch(20)} disabled={!cfg.configured || !!batch?.running}>
@@ -441,8 +443,8 @@ function AiSection({ numberId, days }: { numberId?: number; days: number }) {
           {!batch?.running && batch?.last_error && <Banner tone="bad">Último erro do lote: {batch.last_error}</Banner>}
           {error && <Banner tone="warn">{error}</Banner>}
           <p className="text-[11px] text-ink-500">
-            O lote pega só conversas sem análise ou com mensagem nova desde a última — cada conversa é uma chamada à API
-            da Anthropic, cobrada na sua conta.
+            O lote pega só conversas sem análise ou com mensagem nova desde a última — cada conversa é uma chamada à IA
+            ({cfg.provider === 'claude' ? 'Anthropic' : 'Google Gemini'}), cobrada na sua conta.
           </p>
         </div>
       </Card>
