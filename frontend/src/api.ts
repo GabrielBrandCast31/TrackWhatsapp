@@ -183,6 +183,8 @@ export type Attribution = {
   source_url: string | null
   ad_headline?: string | null
   ad_body?: string | null
+  /** app onde o anúncio rodou: instagram | facebook */
+  ad_source_app?: string | null
   gclid: string | null
   wbraid: string | null
   gbraid: string | null
@@ -548,6 +550,69 @@ export type CrmContact = {
   attribution: Attribution
   attributable_meta: boolean
   attributable_google: boolean
+  /** de onde o lead veio: canal, campanha, objetivo e o evento que ele pede */
+  source: LeadSource
+}
+
+export type LeadChannel = 'meta_ads' | 'google_ads' | 'utm' | 'organic' | 'agenda' | 'simulado'
+
+export type LeadSource = {
+  /** chave estável para filtrar e agrupar (`meta:<campaign_id>`, `utm:<campanha>`, `organic`…) */
+  key: string
+  channel: LeadChannel
+  channel_label: string
+  platform: 'instagram' | 'facebook' | 'messenger' | null
+  platform_label: string | null
+  ad_id: string | null
+  ad_name: string | null
+  ad_headline: string | null
+  adset_name: string | null
+  campaign_id: string | null
+  campaign_name: string | null
+  /** de onde saiu o nome da campanha: Marketing API, preenchido à mão ou utm_campaign */
+  campaign_from: 'meta' | 'manual' | 'utm' | null
+  objective: string | null
+  objective_label: string | null
+  optimization_goal: string | null
+  /** pending = anúncio ainda sem campanha consultada */
+  campaign_status: 'resolved' | 'error' | 'manual' | 'pending' | null
+  campaign_error: string | null
+  suggested_event: string
+  suggested_reason: string
+  utm: Record<string, string>
+}
+
+/** Sentinela: o backend troca pelo evento que o objetivo da campanha pede. */
+export const OBJECTIVE_EVENT = '__objective__'
+
+export type CampaignGroup = {
+  key: string
+  channel: LeadChannel
+  channel_label: string
+  platform: LeadSource['platform']
+  campaign_name: string | null
+  campaign_id: string | null
+  objective: string | null
+  objective_label: string | null
+  suggested_event: string
+  ad_ids: string[]
+  contacts: number
+  won: number
+  with_conversion: number
+}
+
+export type CampaignOverview = {
+  has_ads_token: boolean
+  groups: CampaignGroup[]
+  objectives: { value: string; label: string; event: string | null; default_event: string | null }[]
+}
+
+export type CampaignResolveResult = {
+  ads: number
+  checked: number
+  resolved: number
+  errors: string[]
+  has_token: boolean
 }
 
 export type CrmMessage = {
@@ -661,6 +726,21 @@ export const crmApi = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
+  campaigns: (numberId?: number) =>
+    request<CampaignOverview>(`/api/crm/campaigns${qs({ number_id: numberId })}`),
+  resolveCampaigns: (numberId?: number, force = false) =>
+    request<CampaignResolveResult>(`/api/crm/campaigns/resolve${qs({ number_id: numberId, force })}`, {
+      method: 'POST',
+    }),
+  /** Campanha preenchida à mão para um anúncio. Tudo vazio desfaz o manual. */
+  setCampaign: (
+    adId: string,
+    data: { campaign_name?: string; adset_name?: string; ad_name?: string; objective?: string },
+  ) =>
+    request<unknown>(`/api/crm/campaigns/${encodeURIComponent(adId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 }
 
 // --- instâncias da Evolution API (a "linha" da tela principal) ---
@@ -692,6 +772,10 @@ export type EvoInstance = {
   meta_waba_id: string
   meta_capi_token__set: boolean
   meta_capi_token__hint: string
+  meta_ads_token__set?: boolean
+  meta_ads_token__hint?: string
+  /** objetivo → evento que a linha sobrescreve do mapa padrão */
+  objective_events?: Record<string, string>
   enabled_destinations: string[]
   counts: { contacts?: number; conversions?: number; rules?: number }
 }

@@ -53,6 +53,8 @@ OVERRIDABLE = (
     "meta_test_event_code",
     "meta_page_id",
     "meta_waba_id",
+    "meta_ads_token",
+    "objective_events",
     "google_ads_enabled",
     "google_customer_id",
     "google_login_customer_id",
@@ -73,7 +75,7 @@ OVERRIDABLE = (
     "auto_fire_event_name",
 )
 
-OVERRIDE_SECRETS = {"meta_capi_token", "webhook_secret"}
+OVERRIDE_SECRETS = {"meta_capi_token", "meta_ads_token", "webhook_secret"}
 
 
 class NumberError(Exception):

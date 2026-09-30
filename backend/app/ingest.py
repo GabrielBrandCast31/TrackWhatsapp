@@ -31,6 +31,7 @@ _ATTRIBUTION_FIELDS = (
     "source_url",
     "ad_headline",
     "ad_body",
+    "ad_source_app",
     "gclid",
     "wbraid",
     "gbraid",

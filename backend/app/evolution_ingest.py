@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import campaigns
 from app import numbers as numbers_service
 from app import settings_store
 from app.firing import already_fired, fire_event
@@ -171,7 +172,11 @@ def ad_referral(message: dict) -> dict | None:
         return None
 
     ad = ad or {}
+    # em qual app a pessoa clicou. `sourceApp` vem no bloco do anuncio;
+    # `entryPointConversionApp` vem ao lado, nos marcadores de conversao.
+    app = ad.get("sourceApp") or ad.get("source_app") or _find_key(message, "entryPointConversionApp")
     return {
+        "source_app": str(app).lower() if app else None,
         "ctwa_clid": clid,
         "source_id": ad.get("sourceId") or ad.get("source_id"),
         "source_type": ad.get("sourceType") or ad.get("source_type") or "ad",
@@ -351,7 +356,8 @@ async def _apply_rules(
         fired.append(
             {
                 "rule_id": rule.id,
-                "event": rule.event_name,
+                # regra "pelo objetivo" vira o evento de verdade so no disparo
+                "event": conv.event_name,
                 "status": "fired",
                 "conversion_id": conv.id,
                 "value": hit["value"],
@@ -397,6 +403,7 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
             number.evo_state = str(state)
         result["state"] = state
     elif event in MESSAGE_EVENTS:
+        ad_ids: set[str] = set()
         rules = await _rules_for(session, number.id)
         auto_event = (cfg.get("auto_fire_event_name") or "Contact").strip()
 
@@ -434,6 +441,8 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
             if not from_me and not contact.first_message and text:
                 contact.first_message = text
+            if contact.source_id:
+                ad_ids.add(contact.source_id)
 
             if not from_me and phone:
                 # sem telefone (conversa so com LID) nao da pra casar com prospect:
@@ -496,6 +505,7 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
                 )
 
             result["rules"].extend(await _apply_rules(session, cfg, contact, text, direction, rules))
+        result["ad_ids"] = sorted(ad_ids)
     else:
         result["ignored"] = f"evento {event or 'sem nome'} não usado no rastreio"
 
@@ -512,6 +522,9 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
     log_entry.summary = summary
     await session.commit()
+    # campanha/objetivo do anuncio: consulta a Marketing API depois do commit,
+    # em segundo plano — o webhook nao espera a Graph API.
+    campaigns.schedule_resolve(cfg, result.get("ad_ids") or ())
     result["summary"] = summary
     return result
 

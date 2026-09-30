@@ -231,12 +231,52 @@ Mesmos dados, mesmos endpoints — muda o que cada uma coloca na frente:
 
 | Visualização | Para quê |
 |---|---|
-| **Kanban** | mover a conversa entre `Novo` → `Atendendo` → `Qualificado` → `Ganho`/`Perdido` arrastando o card |
+| **Conversas** | a cara do WhatsApp Web: lista à esquerda, conversa em bolhas, Enter envia, e "Dados do contato" ao lado — bom para atender |
+| **Kanban** | mover a conversa entre `Novo` → `Atendendo` → `Qualificado` → `Ganho`/`Perdido` arrastando o card; cada card leva a etiqueta de origem |
 | **Lista** | tabela com busca e filtros, com o detalhe ao lado — bom para varrer volume |
-| **Caixa de entrada** | conversas por última mensagem, thread ao lado — bom para atender |
 
-Em qualquer uma, clicar abre o mesmo painel: etapa, nota interna, conversa, caixa de
-resposta, a atribuição do anúncio e o disparo manual de conversão.
+Em qualquer uma, clicar abre o mesmo painel: etapa, **de onde veio**, disparo de
+conversão, nota interna, conversa e caixa de resposta.
+
+### De onde o lead veio
+
+Toda conversa ganha uma etiqueta de origem, montada nesta ordem:
+
+| Canal | Como é reconhecido |
+|---|---|
+| **Instagram Ads / Facebook Ads** | bloco Click to WhatsApp (`ctwaClid`, `sourceId`). O app sai de `sourceApp` / `entryPointConversionApp`, ou do link do anúncio |
+| **Google Ads** | `gclid` / `wbraid` / `gbraid`, ou `utm_source=google` |
+| **UTM / link** | UTMs na url de origem ou no texto pré-preenchido pela landing page |
+| **Orgânico / Agenda** | sem nada disso — falou sozinho, ou veio do *Sincronizar* |
+
+O WhatsApp só entrega o **ID do anúncio**. Nome da campanha, conjunto e **objetivo**
+vêm da Marketing API (`GET /{ad_id}?fields=campaign{objective}…`) e ficam em cache na
+tabela `ad_campaigns`. Para isso a linha precisa de um **token com `ads_read`**
+(*Rastreamento → Meta → Token de anúncios*; em branco, tenta o token da CAPI). A consulta
+roda em segundo plano quando o lead chega e ao abrir a conversa; erro (token sem
+permissão, anúncio apagado) só é tentado de novo depois de 1h ou pelo botão *buscar
+campanhas no Meta*. Sem token, dá para **preencher a campanha à mão** por anúncio — o
+manual nunca é sobrescrito pela consulta.
+
+O topo do CRM mostra **leads por origem/campanha** (com conversões e ganhos), e clicar
+num deles filtra a tela.
+
+### Disparo pelo objetivo da campanha
+
+O disparo manual começa em **"Pelo objetivo da campanha"**: o backend troca o evento
+pelo que o objetivo pede, na hora do envio.
+
+| Objetivo | Evento padrão |
+|---|---|
+| Cadastros (`OUTCOME_LEADS`) | `Lead` |
+| Vendas (`OUTCOME_SALES`) | `Purchase` |
+| Engajamento / Tráfego / Reconhecimento | `Contact` |
+| Promoção do app | `CompleteRegistration` |
+
+Cada linha pode trocar esse mapa em *Rastreamento → Evento pelo objetivo da campanha*.
+Lead sem campanha conhecida usa o evento padrão da linha. As **regras de palavra-chave**
+também aceitam o evento *"Pelo objetivo da campanha"*: a mesma frase do atendente dispara
+`Lead` num lead de campanha de Cadastros e `Purchase` num de Vendas.
 
 A busca cobre nome, telefone, nota **e o texto das mensagens** da conversa.
 
@@ -433,6 +473,7 @@ backend/app/
   crm.py                  traz agenda, conversas e histórico da instância pro CRM da linha
   ingest.py               mesmo caminho para o payload da Cloud API (canal legado)
   firing.py               criação + envio de um evento: o caminho único de disparo
+  campaigns.py            de onde o lead veio: anúncio -> campanha -> objetivo -> evento
   tracking.py             extração de ctwa_clid / gclid / wbraid / UTMs
   phones.py               E.164, celular vs fixo, chave canônica do nono dígito
   settings_store.py       config env + override no banco, com mascaramento de segredo
@@ -458,6 +499,7 @@ backend/app/
     evolution.py          cliente da Evolution API, com fallback de formato v2 -> v1
     rules.py              motor das palavras-chave: normalização, match e valor
     meta_capi.py          montagem e envio do evento CAPI
+    meta_ads.py           Marketing API: campanha/objetivo do anúncio e o mapa objetivo -> evento
     whatsapp_cloud.py     Graph API: status, subscribe, texto e template
     apify.py              dispara o actor, acompanha o run, normaliza o lugar
     geo.py                geocode (Nominatim), haversine, área circular
@@ -468,6 +510,7 @@ backend/app/
 backend/tests/
   test_auth.py            fumaça do login: 401 sem token, papéis, refresh, troca de senha
   test_payload.py         webhook -> mensagem -> payload cru servido sob demanda
+  test_campaigns.py       etiqueta de origem, cache de campanha e evento pelo objetivo
 ```
 
 ## Notas

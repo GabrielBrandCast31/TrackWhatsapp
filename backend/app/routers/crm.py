@@ -17,13 +17,14 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import campaigns as campaigns_service
 from app import crm as crm_service
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
 from app.evolution_ingest import ad_referral, apply_ad_attribution, is_from_me
-from app.models import CONTACT_STAGES, Contact, Conversion, Message, WaNumber, WebhookLog
-from app.services import evolution
+from app.models import CONTACT_STAGES, AdCampaign, Contact, Conversion, Message, WaNumber, WebhookLog
+from app.services import evolution, meta_ads
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/crm", tags=["crm"])
@@ -37,7 +38,12 @@ STAGE_LABELS = {
 }
 
 
-def serialize(contact: Contact, conversions: int = 0) -> dict:
+def serialize(
+    contact: Contact,
+    conversions: int = 0,
+    campaign: AdCampaign | None = None,
+    cfg: dict | None = None,
+) -> dict:
     return {
         "id": contact.id,
         "wa_id": contact.wa_id,
@@ -65,6 +71,7 @@ def serialize(contact: Contact, conversions: int = 0) -> dict:
             "source_url": contact.source_url,
             "ad_headline": contact.ad_headline,
             "ad_body": contact.ad_body,
+            "ad_source_app": contact.ad_source_app,
             "gclid": contact.gclid,
             "wbraid": contact.wbraid,
             "gbraid": contact.gbraid,
@@ -72,7 +79,47 @@ def serialize(contact: Contact, conversions: int = 0) -> dict:
         },
         "attributable_meta": bool(contact.ctwa_clid),
         "attributable_google": bool(contact.gclid or contact.wbraid or contact.gbraid),
+        # etiqueta "de onde veio": canal, campanha, objetivo e o evento que ele pede
+        "source": campaigns_service.lead_source(contact, campaign, cfg),
     }
+
+
+class _CfgCache:
+    """Config efetiva por linha, carregada uma vez por requisicao."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self.global_cfg: dict | None = None
+        self.by_number: dict[int | None, dict] = {}
+
+    async def get(self, number_id: int | None) -> dict:
+        if number_id not in self.by_number:
+            if self.global_cfg is None:
+                self.global_cfg = await settings_store.load(self.session)
+            number = await self.session.get(WaNumber, number_id) if number_id is not None else None
+            self.by_number[number_id] = numbers_service.effective_cfg(self.global_cfg, number)
+        return self.by_number[number_id]
+
+
+async def _serialize_many(session: AsyncSession, rows, counts: dict | None = None) -> list[dict]:
+    """Serializa varias conversas com uma consulta so de campanha.
+
+    Anuncio que ainda nao tem campanha no cache e mandado resolver em segundo
+    plano: a lista responde na hora, e a etiqueta aparece na proxima leitura.
+    """
+    counts = counts or {}
+    known = await campaigns_service.campaigns_for(session, (c.source_id for c in rows))
+    cache = _CfgCache(session)
+    out = []
+    pending: dict[int | None, set[str]] = {}
+    for c in rows:
+        cfg = await cache.get(c.wa_number_id)
+        out.append(serialize(c, counts.get(c.id, 0), known.get(c.source_id or ""), cfg))
+        if c.source_id and c.source_id not in known:
+            pending.setdefault(c.wa_number_id, set()).add(c.source_id)
+    for number_id, ad_ids in pending.items():
+        campaigns_service.schedule_resolve(await cache.get(number_id), ad_ids)
+    return out
 
 
 async def _require_number(session: AsyncSession, number_id: int) -> WaNumber:
@@ -151,7 +198,111 @@ async def list_contacts(
         )
 
     rows = (await session.execute(stmt)).scalars().all()
-    return [serialize(c, counts.get(c.id, 0)) for c in rows]
+    return await _serialize_many(session, rows, counts)
+
+
+@router.get("/campaigns")
+async def campaigns(
+    number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
+):
+    """Leads agrupados por origem/campanha — o filtro e o resumo do topo do CRM."""
+    stmt = select(Contact)
+    if number_id is not None:
+        stmt = stmt.where(Contact.wa_number_id == number_id)
+    rows = (await session.execute(stmt)).scalars().all()
+
+    conv_stmt = select(Conversion.contact_id, func.count()).group_by(Conversion.contact_id)
+    counts = dict((await session.execute(conv_stmt)).all())
+
+    groups: dict[str, dict] = {}
+    for item in await _serialize_many(session, rows, counts):
+        src = item["source"]
+        g = groups.setdefault(
+            src["key"],
+            {
+                "key": src["key"],
+                "channel": src["channel"],
+                "channel_label": src["channel_label"],
+                "platform": src["platform"],
+                "campaign_name": src["campaign_name"],
+                "campaign_id": src["campaign_id"],
+                "objective": src["objective"],
+                "objective_label": src["objective_label"],
+                "suggested_event": src["suggested_event"],
+                "ad_ids": [],
+                "contacts": 0,
+                "won": 0,
+                "with_conversion": 0,
+            },
+        )
+        g["contacts"] += 1
+        g["won"] += 1 if item["stage"] == "ganho" else 0
+        g["with_conversion"] += 1 if item["conversions"] else 0
+        if src["ad_id"] and src["ad_id"] not in g["ad_ids"]:
+            g["ad_ids"].append(src["ad_id"])
+
+    cfg = await _CfgCache(session).get(number_id)
+    return {
+        "has_ads_token": bool(meta_ads.ads_token(cfg)),
+        "groups": sorted(groups.values(), key=lambda g: (-g["contacts"], g["key"])),
+        "objectives": [
+            {
+                "value": o,
+                "label": meta_ads.objective_label(o),
+                "event": meta_ads.event_for_objective(o, cfg),
+                "default_event": meta_ads.OBJECTIVE_EVENTS.get(o),
+            }
+            for o in meta_ads.EDITABLE_OBJECTIVES
+        ],
+    }
+
+
+@router.post("/campaigns/resolve")
+async def resolve_campaigns(
+    number_id: int | None = Query(default=None),
+    force: bool = Query(default=False, description="consulta de novo até o que já foi resolvido"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Consulta na Marketing API a campanha dos anúncios dos leads dessa linha."""
+    cfg = await _CfgCache(session).get(number_id)
+    return await campaigns_service.resolve_for_number(session, cfg, number_id, force=force)
+
+
+class CampaignIn(BaseModel):
+    campaign_name: str | None = None
+    adset_name: str | None = None
+    ad_name: str | None = None
+    objective: str | None = None
+
+
+@router.put("/campaigns/{ad_id}")
+async def set_campaign(ad_id: str, payload: CampaignIn, session: AsyncSession = Depends(get_session)):
+    """Campanha preenchida à mão — para quem não tem token com `ads_read`.
+
+    Fica marcada como manual e a consulta automática nunca a sobrescreve.
+    Mandar tudo vazio desfaz o manual e devolve o anúncio para a consulta.
+    """
+    row = await session.get(AdCampaign, ad_id)
+    fields = payload.model_dump()
+    if not any((v or "").strip() for v in fields.values()):
+        if row is not None:
+            await session.delete(row)
+            await session.commit()
+        return {"ad_id": ad_id, "removed": True}
+
+    if payload.objective and payload.objective not in meta_ads.OBJECTIVE_LABEL:
+        raise HTTPException(status_code=400, detail=f"Objetivo desconhecido: {payload.objective}")
+    if row is None:
+        row = AdCampaign(ad_id=ad_id)
+        session.add(row)
+    for key, value in fields.items():
+        setattr(row, key, (value or "").strip() or None)
+    row.manual = True
+    row.status = "manual"
+    row.error = None
+    await session.commit()
+    await session.refresh(row)
+    return campaigns_service.serialize_campaign(row)
 
 
 @router.get("/pipeline")
@@ -265,15 +416,24 @@ async def get_contact(contact_id: int, session: AsyncSession = Depends(get_sessi
         .all()
     )
 
-    if not contact.ctwa_clid:
+    app_before = contact.ad_source_app
+    if not contact.ctwa_clid or (contact.source_id and not contact.ad_source_app):
         # Confere o payload de cada mensagem gravada. O `externalAdReply` pode ter
         # entrado por um caminho que nao olhava o anuncio (sync antigo, historico
         # puxado antes da correcao); se esta no `raw` que a tela mostra, o lead
         # tem que sair daqui atribuido — nao na proxima rodada do sync.
-        if any(apply_ad_attribution(contact, m.raw or {}) for m in msgs):
+        found = [apply_ad_attribution(contact, m.raw or {}) for m in msgs]
+        if any(found):
             log.info("contato %s: ctwa_clid achado no payload de uma mensagem gravada", contact.id)
+        if any(found) or contact.ad_source_app != app_before:
             await session.commit()
             await session.refresh(contact)
+
+    cfg = await _CfgCache(session).get(contact.wa_number_id)
+    # abrir a conversa e a hora de saber a campanha: consulta aqui mesmo se faltar
+    campaign = (
+        await campaigns_service.resolve_ad(session, cfg, contact.source_id) if contact.source_id else None
+    )
 
     convs = (
         (
@@ -291,7 +451,7 @@ async def get_contact(contact_id: int, session: AsyncSession = Depends(get_sessi
     from app.routers.conversions import serialize_conversion
 
     return {
-        **serialize(contact, len(convs)),
+        **serialize(contact, len(convs), campaign, cfg),
         "messages": [
             {
                 "id": m.id,
@@ -395,7 +555,7 @@ async def patch_contact(
 
     await session.commit()
     await session.refresh(contact)
-    return serialize(contact)
+    return (await _serialize_many(session, [contact]))[0]
 
 
 @router.post("/sync")

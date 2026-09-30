@@ -17,6 +17,7 @@ from app.db import get_session
 from app.firing import fire_event
 from app.models import Contact, Conversion, WaNumber
 from app.services.dispatch import ALL_DESTINATIONS, dispatch_conversion, enabled_destinations
+from app.services.meta_ads import OBJECTIVE_EVENT
 
 router = APIRouter(prefix="/api", tags=["conversions"])
 
@@ -179,6 +180,10 @@ async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depe
     from app.tracking import to_e164
 
     event_name = payload.event_name or cfg.get("default_event_name") or "Lead"
+    if event_name == OBJECTIVE_EVENT:
+        from app.campaigns import event_for_contact
+
+        event_name, _ = await event_for_contact(session, cfg, contact)
     currency = payload.currency or cfg.get("default_currency") or "BRL"
     event_id = "preview-nao-enviado"
     previews: dict = {}

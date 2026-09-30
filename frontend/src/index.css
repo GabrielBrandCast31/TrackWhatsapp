@@ -12,6 +12,16 @@
   --color-wa-500: #25d366;
   --color-wa-600: #1eb655;
   --color-wa-900: #0b3d21;
+  /* visualização de conversas do CRM: a paleta do WhatsApp Web no tema escuro */
+  --color-chat-bg: #0b141a;
+  --color-chat-panel: #111b21;
+  --color-chat-header: #202c33;
+  --color-chat-hover: #2a3942;
+  --color-chat-line: #222d34;
+  --color-chat-in: #202c33;
+  --color-chat-out: #005c4b;
+  --color-chat-text: #e9edef;
+  --color-chat-muted: #8696a0;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -44,4 +54,14 @@ input,
 select,
 textarea {
   color-scheme: dark;
+}
+
+/* fundo da conversa: o "papel de parede" discreto do WhatsApp, sem imagem */
+.wa-wallpaper {
+  background-color: var(--color-chat-bg);
+  background-image:
+    radial-gradient(circle at 20% 20%, rgb(255 255 255 / 0.025) 0 1.5px, transparent 2px),
+    radial-gradient(circle at 70% 60%, rgb(255 255 255 / 0.02) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 40% 85%, rgb(37 211 102 / 0.025) 0 1.5px, transparent 2px);
+  background-size: 46px 46px, 34px 34px, 58px 58px;
 }

@@ -18,6 +18,7 @@ SECRET_FIELDS = {
     "wa_access_token",
     "wa_app_secret",
     "meta_capi_token",
+    "meta_ads_token",
     "google_client_secret",
     "google_refresh_token",
     "google_developer_token",
@@ -48,6 +49,12 @@ DEFAULTS: dict = {
     # WhatsApp Business) nao tem WABA de Cloud API: quase sempre e o Page ID.
     "meta_page_id": os.getenv("META_PAGE_ID", ""),
     "meta_waba_id": os.getenv("META_WABA_ID", ""),
+    # token com `ads_read` (usuario do sistema do Business Manager). E com ele que
+    # o `ad_id` do anuncio vira nome de campanha + objetivo. Vazio: tenta o da CAPI.
+    "meta_ads_token": os.getenv("META_ADS_TOKEN", ""),
+    # objetivo da campanha -> evento. So o que difere do padrao de
+    # services.meta_ads.OBJECTIVE_EVENTS precisa estar aqui.
+    "objective_events": {},
     # --- Google Ads offline conversions ---
     "google_ads_enabled": False,
     "google_customer_id": os.getenv("GOOGLE_CUSTOMER_ID", ""),          # sem tracos

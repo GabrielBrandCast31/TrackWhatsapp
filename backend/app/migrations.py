@@ -28,6 +28,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "last_message_from_me": "BOOLEAN",
         "unread_count": "INTEGER",
         "synced_at": "TIMESTAMP",
+        # app onde o anuncio rodou (instagram / facebook)
+        "ad_source_app": "VARCHAR(32)",
     },
     # ponteiro da mensagem pro POST de webhook que a trouxe (ver o payload cru)
     "messages": {"webhook_log_id": "INTEGER"},

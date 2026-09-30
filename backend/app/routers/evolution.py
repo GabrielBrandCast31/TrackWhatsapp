@@ -38,7 +38,16 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:3031")
 EVOLUTION_CALLBACK_BASE_URL = os.getenv("EVOLUTION_CALLBACK_BASE_URL", "").strip()
 
 # campos do destino Meta que a linha guarda em `overrides`
-META_FIELDS = ("meta_dataset_id", "meta_capi_token", "meta_test_event_code", "meta_page_id", "meta_waba_id")
+META_FIELDS = (
+    "meta_dataset_id",
+    "meta_capi_token",
+    "meta_test_event_code",
+    "meta_page_id",
+    "meta_waba_id",
+    "meta_ads_token",
+)
+# segredo: vazio no formulario significa "mantem o atual"
+_META_SECRETS = ("meta_capi_token", "meta_ads_token")
 
 
 def _webhook_path(number: WaNumber) -> str:
@@ -62,6 +71,7 @@ def public_webhook_url_for(number: WaNumber) -> str:
 def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = None) -> dict:
     overrides = number.overrides or {}
     token = overrides.get("meta_capi_token") or ""
+    ads_token = overrides.get("meta_ads_token") or ""
     return {
         "id": number.id,
         "label": number.label,
@@ -89,6 +99,10 @@ def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = N
         "meta_waba_id": overrides.get("meta_waba_id") or "",
         "meta_capi_token__set": bool(token),
         "meta_capi_token__hint": f"...{token[-4:]}" if len(token) >= 4 else "",
+        "meta_ads_token__set": bool(ads_token),
+        "meta_ads_token__hint": f"...{ads_token[-4:]}" if len(ads_token) >= 4 else "",
+        # so o que a linha sobrescreve do mapa padrao objetivo -> evento
+        "objective_events": overrides.get("objective_events") or {},
         "enabled_destinations": enabled_destinations(cfg) if cfg else [],
         "counts": counts or {},
     }
@@ -104,6 +118,8 @@ class InstanceIn(BaseModel):
     meta_test_event_code: str | None = None
     meta_page_id: str | None = None
     meta_waba_id: str | None = None
+    meta_ads_token: str | None = None
+    objective_events: dict[str, str] | None = None
     note: str | None = None
     active: bool = True
     is_default: bool = False
@@ -122,6 +138,8 @@ class InstancePatch(BaseModel):
     meta_test_event_code: str | None = None
     meta_page_id: str | None = None
     meta_waba_id: str | None = None
+    meta_ads_token: str | None = None
+    objective_events: dict[str, str] | None = None
     note: str | None = None
     active: bool | None = None
     is_default: bool | None = None
@@ -135,9 +153,14 @@ def _apply_meta(number: WaNumber, payload: InstanceIn | InstancePatch) -> None:
         value = getattr(payload, field, None)
         if value is None:
             continue
-        if field == "meta_capi_token" and value == "":
+        if field in _META_SECRETS and value == "":
             continue  # nao apaga segredo por omissao
         overrides[field] = value.strip()
+    if payload.objective_events is not None:
+        # guarda so o que foi escolhido; objetivo sem evento volta para o padrao
+        overrides["objective_events"] = {
+            k: v.strip() for k, v in payload.objective_events.items() if v and v.strip()
+        }
     # com pixel e token na linha, o destino Meta esta ligado pra ela
     if overrides.get("meta_dataset_id") and overrides.get("meta_capi_token"):
         overrides["meta_capi_enabled"] = True

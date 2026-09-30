@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Contact, Conversion
 from app.services.dispatch import dispatch_conversion, enabled_destinations
+from app.services.meta_ads import OBJECTIVE_EVENT
 
 
 async def fire_event(
@@ -28,7 +29,17 @@ async def fire_event(
     rule_id: int | None = None,
     destinations: list[str] | None = None,
 ) -> Conversion:
-    """Grava a conversao e manda pros destinos. Devolve a conversao ja com os envios."""
+    """Grava a conversao e manda pros destinos. Devolve a conversao ja com os envios.
+
+    `event_name=OBJECTIVE_EVENT` troca o nome pelo evento que o objetivo da
+    campanha do lead pede (Leads -> Lead, Vendas -> Purchase...).
+    """
+    if event_name == OBJECTIVE_EVENT:
+        from app.campaigns import event_for_contact
+
+        event_name, reason = await event_for_contact(session, cfg, contact)
+        note = f"{note} — pelo {reason}" if note else f"Evento pelo objetivo — {reason}."
+
     conv = Conversion(
         contact_id=contact.id,
         event_name=event_name,

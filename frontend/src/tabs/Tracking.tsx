@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
+  crmApi,
   evolutionApi,
   rulesApi,
+  type CampaignOverview,
   type EvoInstance,
   type KeywordRule,
   type RuleCatalog,
@@ -79,6 +81,7 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
     meta_test_event_code: instance.meta_test_event_code,
     meta_page_id: instance.meta_page_id ?? '',
     meta_waba_id: instance.meta_waba_id ?? '',
+    meta_ads_token: '',
   })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
@@ -90,6 +93,7 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
       meta_test_event_code: instance.meta_test_event_code,
       meta_page_id: instance.meta_page_id ?? '',
       meta_waba_id: instance.meta_waba_id ?? '',
+      meta_ads_token: '',
     })
   }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code, instance.meta_page_id, instance.meta_waba_id])
 
@@ -158,6 +162,22 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
             />
           </Field>
         </div>
+
+        <Field
+          label="Token de anúncios (ads_read) — opcional"
+          hint={
+            instance.meta_ads_token__set
+              ? `Salvo (${instance.meta_ads_token__hint}). Deixe em branco para manter.`
+              : 'É com ele que o ID do anúncio vira nome da campanha, conjunto e objetivo no CRM. Business Manager → Usuários do sistema → Gerar token com ads_read na conta de anúncios. Em branco, tenta o token da CAPI.'
+          }
+        >
+          <Input
+            type="password"
+            value={draft.meta_ads_token}
+            placeholder={instance.meta_ads_token__set ? '•••••••• (mantém o atual)' : ''}
+            onChange={(e) => setDraft({ ...draft, meta_ads_token: e.target.value })}
+          />
+        </Field>
 
         {!hasBusinessId && (
           <Banner tone="warn">
@@ -444,6 +464,100 @@ function RuleEditor({
   )
 }
 
+/** Objetivo da campanha → evento que o disparo "pelo objetivo" manda nesta linha. */
+function ObjectiveEvents({
+  instance,
+  catalog,
+  onSaved,
+}: {
+  instance: EvoInstance
+  catalog: RuleCatalog
+  onSaved: () => Promise<void>
+}) {
+  const [overview, setOverview] = useState<CampaignOverview | null>(null)
+  const [draft, setDraft] = useState<Record<string, string>>(instance.objective_events ?? {})
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const events = catalog.events.filter((e) => e.name !== '__objective__')
+
+  useEffect(() => {
+    setDraft(instance.objective_events ?? {})
+    void crmApi
+      .campaigns(instance.id)
+      .then(setOverview)
+      .catch(() => setOverview(null))
+  }, [instance.id, instance.objective_events])
+
+  if (!overview) return null
+  const dirty = JSON.stringify(draft) !== JSON.stringify(instance.objective_events ?? {})
+
+  return (
+    <Card
+      title="Evento pelo objetivo da campanha"
+      subtitle="Qual evento sai quando o disparo (no CRM ou numa regra) é “pelo objetivo da campanha”."
+      actions={
+        overview.has_ads_token ? (
+          <Badge tone="good">token de anúncios ok</Badge>
+        ) : (
+          <Badge tone="warn">sem token de anúncios</Badge>
+        )
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {overview.objectives.map((o) => (
+            <Field key={o.value} label={o.label}>
+              <Select
+                value={draft[o.value] ?? ''}
+                onChange={(e) => {
+                  const next = { ...draft }
+                  if (e.target.value) next[o.value] = e.target.value
+                  else delete next[o.value]
+                  setDraft(next)
+                }}
+              >
+                <option value="">padrão ({o.default_event})</option>
+                {events.map((e) => (
+                  <option key={e.name} value={e.name}>
+                    {e.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ))}
+        </div>
+        <p className="max-w-3xl text-[11px] leading-relaxed text-ink-500">
+          O objetivo vem da Marketing API pelo ID do anúncio do lead (<code className="font-mono">sourceId</code> do
+          Click to WhatsApp). Lead sem campanha conhecida usa o evento padrão da linha. Nas regras de palavra-chave,
+          escolha o evento <em>“Pelo objetivo da campanha”</em> para a mesma frase do atendente disparar{' '}
+          <code className="font-mono">Lead</code> numa campanha de Cadastros e <code className="font-mono">Purchase</code>{' '}
+          numa de Vendas.
+        </p>
+        {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
+        <Button
+          variant="primary"
+          disabled={busy || !dirty}
+          onClick={async () => {
+            setBusy(true)
+            setMsg(null)
+            try {
+              await evolutionApi.patch(instance.id, { objective_events: draft })
+              await onSaved()
+              setMsg({ tone: 'good', text: 'Mapa de objetivo → evento salvo para esta linha.' })
+            } catch (e) {
+              setMsg({ tone: 'bad', text: (e as Error).message })
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          {busy ? 'salvando…' : 'Salvar'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 export default function Tracking({ onChanged }: { onChanged: () => void }) {
   const { numberId, current, numbers, reload, loading } = useNumber()
   const [catalog, setCatalog] = useState<RuleCatalog | null>(null)
@@ -493,6 +607,8 @@ export default function Tracking({ onChanged }: { onChanged: () => void }) {
       {err && <Banner tone="bad">{err}</Banner>}
 
       <MetaDestination instance={current} onSaved={refresh} />
+
+      <ObjectiveEvents instance={current} catalog={catalog} onSaved={refresh} />
 
       <Card
         title="Eventos de conversão por palavra-chave"

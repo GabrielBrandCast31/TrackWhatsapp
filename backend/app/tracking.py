@@ -100,6 +100,7 @@ def extract(referral: dict | None, message_text: str | None) -> dict:
         "source_url": referral.get("source_url"),
         "ad_headline": referral.get("headline"),
         "ad_body": referral.get("body"),
+        "ad_source_app": (str(referral.get("source_app")).lower() if referral.get("source_app") else None),
         "gclid": found.get("gclid"),
         "wbraid": found.get("wbraid"),
         "gbraid": found.get("gbraid"),

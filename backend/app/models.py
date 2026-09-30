@@ -107,6 +107,9 @@ class Contact(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     ad_headline: Mapped[str | None] = mapped_column(Text, nullable=True)
     ad_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # onde o anuncio rodou: "instagram" | "facebook" | ... (`externalAdReply.sourceApp`
+    # ou `entryPointConversionApp`). O `ad_id` sozinho nao diz em qual app a pessoa clicou.
+    ad_source_app: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # --- atribuicao Google ---
     gclid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
@@ -236,6 +239,38 @@ class WebhookLog(Base):
         ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdCampaign(Base):
+    """Cache de "de qual campanha e esse anuncio", por `ad_id`.
+
+    O WhatsApp so entrega o id do anuncio (`externalAdReply.sourceId`). Nome da
+    campanha, conjunto e objetivo vem da Marketing API do Meta
+    (`GET /{ad_id}?fields=campaign{objective}...`) — consulta que precisa de token
+    com `ads_read` e que nao pode rodar a cada tela aberta. Por isso fica aqui.
+
+    `ad_id` e global no Meta, entao a chave nao carrega linha: dois clientes nunca
+    dividem o mesmo anuncio. `manual` marca o que alguem preencheu na mao (sem
+    token de anuncios) — esse registro nunca e sobrescrito pela consulta.
+    """
+
+    __tablename__ = "ad_campaigns"
+
+    ad_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ad_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adset_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adset_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    campaign_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    campaign_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    objective: Mapped[str | None] = mapped_column(String(64), nullable=True)            # OUTCOME_LEADS...
+    optimization_goal: Mapped[str | None] = mapped_column(String(64), nullable=True)    # CONVERSATIONS...
+
+    # resolved | error | manual
+    status: Mapped[str] = mapped_column(String(16), default="resolved")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class KeywordRule(Base):

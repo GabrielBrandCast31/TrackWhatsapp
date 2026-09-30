@@ -22,6 +22,8 @@ EVENT_CATALOG = (
     {"name": "StartTrial", "label": "StartTrial — Início de teste", "accepts_value": True},
     {"name": "InitiateCheckout", "label": "InitiateCheckout — Negociação iniciada", "accepts_value": True},
     {"name": "Purchase", "label": "Purchase — Venda fechada", "accepts_value": True},
+    # resolvido no disparo pelo objetivo da campanha do lead (app.campaigns)
+    {"name": "__objective__", "label": "Pelo objetivo da campanha (automático)", "accepts_value": True},
 )
 
 MATCH_MODES = ("broad", "exact")
