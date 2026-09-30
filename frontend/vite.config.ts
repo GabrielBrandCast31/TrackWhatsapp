@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: API, changeOrigin: true },
       '/webhook': { target: API, changeOrigin: true },
+      '/t/': { target: API, changeOrigin: true },
     },
   },
 })

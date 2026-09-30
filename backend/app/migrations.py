@@ -30,6 +30,20 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "synced_at": "TIMESTAMP",
         # app onde o anuncio rodou (instagram / facebook)
         "ad_source_app": "VARCHAR(32)",
+        # jornada no site: referencia ao TL_ID e a atribuicao recuperada dele
+        "transaction_id": "VARCHAR(64)",
+        "visitor_id": "VARCHAR(64)",
+        "session_id": "VARCHAR(64)",
+        "first_utm": "JSON",
+        "last_utm": "JSON",
+        "fbp": "VARCHAR(255)",
+        "fbc": "VARCHAR(512)",
+        "ttclid": "VARCHAR(255)",
+        "landing_page": "TEXT",
+        "page_url": "TEXT",
+        "match_method": "VARCHAR(16)",
+        "match_score": "FLOAT",
+        "whatsapp_arrived_at": "TIMESTAMP",
     },
     # ponteiro da mensagem pro POST de webhook que a trouxe (ver o payload cru)
     "messages": {"webhook_log_id": "INTEGER"},
@@ -46,6 +60,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "evo_state": "VARCHAR(32)",
         "evo_owner_jid": "VARCHAR(64)",
         "webhook_token": "VARCHAR(64)",
+        # chave publica da tag do site
+        "site_key": "VARCHAR(32)",
     },
     # de onde veio o evento: botao, regra de palavra-chave ou primeiro contato
     "conversions": {"source": "VARCHAR(16)", "rule_id": "INTEGER"},
@@ -116,7 +132,17 @@ def _backfill(conn) -> None:
             log.info("migracao: %s.%s preenchida em %s linha(s)", table, column, result.rowcount)
 
 
+def _contact_journey_index(conn) -> None:
+    """A conversa acha a jornada pelo TL_ID: sem indice, cada mensagem varreria contacts."""
+    inspector = inspect(conn)
+    if "contacts" not in set(inspector.get_table_names()):
+        return
+    if "ix_contacts_transaction_id" not in {i["name"] for i in inspector.get_indexes("contacts")}:
+        conn.execute(text("CREATE INDEX ix_contacts_transaction_id ON contacts (transaction_id)"))
+
+
 def upgrade(conn) -> None:
     _add_missing_columns(conn)
+    _contact_journey_index(conn)
     _relax_unique_indexes(conn)
     _backfill(conn)

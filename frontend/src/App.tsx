@@ -5,10 +5,12 @@ import { api, type Stats } from './api'
 import { AuthProvider, useAuth } from './authContext'
 import {
   IconBoard,
+  IconCode,
   IconMenu,
   IconPlug,
   IconRadar,
   IconRefresh,
+  IconRoute,
   IconShield,
   IconTarget,
   IconTrending,
@@ -23,14 +25,18 @@ import Attribution from './tabs/Attribution'
 import Conversions from './tabs/Conversions'
 import CrmNumber from './tabs/CrmNumber'
 import Instances from './tabs/Instances'
+import Journeys from './tabs/Journeys'
 import Leads from './tabs/Leads'
+import SiteTag from './tabs/SiteTag'
 import Tracking from './tabs/Tracking'
 
 const TABS = [
+  { id: 'journeys', label: 'Jornadas', hint: 'Anúncio → site → WhatsApp → lead', Icon: IconRoute },
+  { id: 'sitetag', label: 'Tag do site', hint: 'TL_ID, eventos e simulador', Icon: IconCode },
+  { id: 'crm', label: 'CRM', hint: 'Conversas com a origem', Icon: IconBoard },
   { id: 'instances', label: 'Conexão', hint: 'Evolution API', Icon: IconPlug },
-  { id: 'tracking', label: 'Rastreamento', hint: 'Links e ctwa_clid', Icon: IconRadar },
+  { id: 'tracking', label: 'Rastreamento', hint: 'Pixel, regras e ctwa_clid', Icon: IconRadar },
   { id: 'attribution', label: 'Atribuição', hint: 'Anúncio × conversa', Icon: IconTarget },
-  { id: 'crm', label: 'CRM', hint: 'Funil e atendimento', Icon: IconBoard },
   { id: 'leads', label: 'Leads', hint: 'Base de contatos', Icon: IconUsers },
   { id: 'conversions', label: 'Conversões', hint: 'Envios ao Meta', Icon: IconTrending },
   // só admin: o backend recusa as rotas de dentro dela pra perfil de operação
@@ -40,6 +46,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 const COLLAPSE_KEY = 'wa.sidebarCollapsed'
+const TAB_KEY = 'wa.tab'
 
 function Stat({ label, value, accent }: { label: string; value: string | number; accent?: boolean }) {
   return (
@@ -84,6 +91,16 @@ function NumberPicker() {
   )
 }
 
+function readTab(): TabId {
+  try {
+    const saved = localStorage.getItem(TAB_KEY)
+    if (saved && TABS.some((t) => t.id === saved)) return saved as TabId
+  } catch {
+    // navegador sem storage
+  }
+  return 'journeys'
+}
+
 function readCollapsed(): boolean {
   try {
     return localStorage.getItem(COLLAPSE_KEY) === '1'
@@ -93,7 +110,15 @@ function readCollapsed(): boolean {
 }
 
 function Shell() {
-  const [tab, setTab] = useState<TabId>('instances')
+  const [tab, setTabState] = useState<TabId>(readTab)
+  const setTab = (id: TabId) => {
+    setTabState(id)
+    try {
+      localStorage.setItem(TAB_KEY, id)
+    } catch {
+      // sem storage: a aba volta pra Jornadas no próximo carregamento
+    }
+  }
   const [stats, setStats] = useState<Stats | null>(null)
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -147,10 +172,10 @@ function Shell() {
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm text-ink-300">
               Olá <span className="font-semibold text-ink-100">{user?.name || user?.username}</span>, seja bem-vindo ao{' '}
-              <span className="font-semibold text-wa-500">Conversion Tracker</span>!
+              <span className="font-semibold text-wa-500">Rastreador de Jornada do Lead</span>!
             </p>
             <p className="hidden truncate text-[11px] text-ink-500 sm:block">
-              Evolution API → ctwa_clid do anúncio → palavra-chave do atendente → conversão no Meta
+              Anúncio → site (TL_ID) → clique no WhatsApp → conversa → lead com a origem recuperada
             </p>
           </div>
 
@@ -186,15 +211,17 @@ function Shell() {
 
             {stats && (
               <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                <Stat label="Jornadas no site" value={stats.journeys ?? 0} />
+                <Stat label="Cliques no WhatsApp" value={stats.whatsapp_clicks ?? 0} />
+                <Stat label="Leads com jornada" value={stats.journey_leads ?? 0} accent />
                 <Stat label="Leads" value={stats.contacts} />
                 <Stat label="Com atribuição" value={stats.attributed_contacts} accent />
                 <Stat label="Conversões" value={stats.conversions} />
-                <Stat label="Por palavra-chave" value={stats.rule_conversions ?? 0} accent />
-                <Stat label="Regras" value={stats.rules ?? 0} />
-                <Stat label="Falhas" value={stats.dispatches.error ?? 0} />
               </div>
             )}
 
+            {tab === 'journeys' && <Journeys />}
+            {tab === 'sitetag' && <SiteTag />}
             {tab === 'instances' && <Instances onChanged={refresh} />}
             {tab === 'tracking' && <Tracking onChanged={refresh} />}
             {tab === 'attribution' && <Attribution />}

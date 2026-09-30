@@ -15,7 +15,9 @@ import {
   type CrmStage,
   type LeadSource,
   type RuleCatalog,
+  stripJourneyRef,
 } from '../api'
+import { ContactJourney } from '../JourneyView'
 import { ChannelIcon, ObjectiveChip, SourceDetails, SourceTag } from '../LeadSource'
 import { MessagePayloadToggle } from '../MessagePayload'
 import { useNumber } from '../numberContext'
@@ -584,7 +586,9 @@ function ChatThread({ detail, pending = [] }: { detail: CrmContactDetail; pendin
         const prev = messages[i - 1]
         const newDay = !prev || new Date(prev.sent_at).toDateString() !== new Date(m.sent_at).toDateString()
         const first = newDay || !prev || prev.direction !== m.direction
-        const body = preview(m.body, m.type)
+        // a referência técnica (tl=… / protocolo) só serve pra ligar a jornada
+        const { text: shown, ref } = stripJourneyRef(m.body)
+        const body = preview(shown, m.type)
         const isMedia = !m.body || /^\[\w+\]$/.test(m.body.trim())
         return (
           <div key={m.id} className="contents">
@@ -615,6 +619,11 @@ function ChatThread({ detail, pending = [] }: { detail: CrmContactDetail; pendin
                   <span className={`inline-block ${m.has_payload !== false ? 'w-24' : 'w-12'}`} />
                 </p>
                 <div className="-mt-3.5 flex flex-wrap items-center justify-end gap-2 text-[10.5px] text-chat-muted">
+                  {ref && (
+                    <span title={`referência técnica anexada ao clique: ${ref}`} className="rounded bg-ink-950/40 px-1 font-mono">
+                      jornada
+                    </span>
+                  )}
                   {m.has_payload !== false && <MessagePayloadToggle messageId={m.id} />}
                   <span title={when(m.sent_at)}>{clock(m.sent_at)}</span>
                 </div>
@@ -810,6 +819,12 @@ function ContactInfo({
         <StagePills detail={detail} onChanged={refresh} />
       </Section>
       <Section
+        title="Jornada no site"
+        info="A navegação do visitante antes de chamar no WhatsApp, ligada pelo TL_ID que a tag anexou ao clique."
+      >
+        <ContactJourney contactId={detail.id} onChanged={refresh} />
+      </Section>
+      <Section
         title="De onde veio"
         info="Canal, campanha, conjunto e anúncio do lead. O nome da campanha e o objetivo vêm da Marketing API do Meta pelo ID do anúncio."
       >
@@ -868,7 +883,7 @@ function ConversationItem({ c, active, onOpen }: { c: CrmContact; active: boolea
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <p className="truncate text-[13px] text-chat-muted">
             {c.last_message_from_me && <span className="text-chat-muted/80">Você: </span>}
-            {preview(c.last_message_body) ?? <em>sem mensagem</em>}
+            {preview(stripJourneyRef(c.last_message_body).text) ?? <em>sem mensagem</em>}
           </p>
           {unread && (
             <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-wa-500 px-1.5 text-[11px] font-semibold text-ink-950">
@@ -1108,9 +1123,9 @@ function Conversas({
                 <path d="M4 20l1.3-3.9A8 8 0 1 1 8 19.2L4 20Z" strokeLinejoin="round" />
               </svg>
             </span>
-            <p className="text-2xl font-light text-chat-text">Conversion Tracker</p>
+            <p className="text-2xl font-light text-chat-text">Jornada do Lead</p>
             <p className="max-w-sm text-sm leading-relaxed text-chat-muted">
-              Escolha uma conversa para responder, ver de qual campanha o lead veio e disparar a conversão pelo
+              Escolha uma conversa para responder, ver a jornada no site, de qual campanha o lead veio e disparar a conversão pelo
               objetivo da campanha.
             </p>
           </div>
@@ -1259,7 +1274,7 @@ function Kanban({
                   </div>
                   <p className="line-clamp-2 text-[11px] leading-snug text-ink-500">
                     {c.last_message_from_me ? 'você: ' : ''}
-                    {preview(c.last_message_body) ?? 'sem mensagem'}
+                    {preview(stripJourneyRef(c.last_message_body).text) ?? 'sem mensagem'}
                   </p>
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -1337,7 +1352,7 @@ function Lista({
               <td className="max-w-[240px] px-2 py-2.5">
                 <p className="truncate text-xs text-ink-500">
                   {c.last_message_from_me ? 'você: ' : ''}
-                  {preview(c.last_message_body) ?? '—'}
+                  {preview(stripJourneyRef(c.last_message_body).text) ?? '—'}
                 </p>
               </td>
               <td className="px-2 py-2.5 text-right font-mono text-[11px] text-ink-500">

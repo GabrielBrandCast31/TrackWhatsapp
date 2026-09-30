@@ -158,6 +158,26 @@ export function IconClose(p: Props) {
   )
 }
 
+/** Jornadas — o caminho do anúncio ao lead, com os pontos de passagem. */
+export function IconRoute(p: Props) {
+  return (
+    <Svg {...p}>
+      <circle cx="6" cy="18" r="2.2" />
+      <circle cx="18" cy="6" r="2.2" />
+      <path d="M8.2 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.8" />
+    </Svg>
+  )
+}
+
+/** Tag do site — sinais de código. */
+export function IconCode(p: Props) {
+  return (
+    <Svg {...p}>
+      <path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16" />
+    </Svg>
+  )
+}
+
 /** Marca do produto — balão de conversa com o traço de conversão dentro. */
 export function Logo({ className = 'h-9 w-9' }: Props) {
   return (
@@ -166,7 +186,9 @@ export function Logo({ className = 'h-9 w-9' }: Props) {
     >
       <svg viewBox="0 0 24 24" className="h-[60%] w-[60%]" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.4-5A8.5 8.5 0 1 1 21 11.5Z" />
-        <path d="M8.5 13.2 11 10.6l2 2 3-3.4" />
+        <circle cx="8.3" cy="13.4" r="1.1" fill="currentColor" stroke="none" />
+        <path d="M9.6 13.4h2.6a1.6 1.6 0 0 0 0-3.2h-.4a1.6 1.6 0 0 1 0-3.2h1.8" />
+        <circle cx="15.2" cy="7" r="1.1" fill="currentColor" stroke="none" />
       </svg>
     </span>
   )

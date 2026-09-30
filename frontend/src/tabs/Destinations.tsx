@@ -23,14 +23,9 @@ const META: FieldDef[] = [
     hint: 'Events Manager > Test Events. Usado só quando o disparo está em "modo teste".',
   },
   {
-    key: 'meta_page_id',
-    label: 'Page ID',
-    hint: 'Página do Facebook que roda os anúncios e está ligada ao dataset. O Meta exige Page ID ou WABA em evento do WhatsApp.',
-  },
-  {
     key: 'meta_waba_id',
     label: 'WhatsApp Business Account ID (WABA)',
-    hint: 'Só se o dataset estiver ligado a uma WABA. Com Page ID preenchido, este fica de fora.',
+    hint: 'Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. É obrigatório no evento do WhatsApp.',
   },
 ]
 

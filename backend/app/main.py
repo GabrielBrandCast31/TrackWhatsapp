@@ -1,6 +1,10 @@
-"""Plataforma de rastreamento de WhatsApp -> conversao em campanha.
+"""Rastreador de jornada do lead: anuncio -> site -> WhatsApp -> lead -> conversao.
 
-Fluxo: anuncio Click to WhatsApp -> a pessoa manda mensagem -> a **Evolution API**
+A tag do site (`/t/tl.js`) da a cada visitante um TL_ID e grava a navegacao em
+`tracking_events`; quando a conversa chega no WhatsApp, o TL_ID anexado ao
+clique liga o lead a jornada e recupera de qual anuncio ele veio (app.journey).
+
+Fluxo do anuncio Click to WhatsApp (sem site no meio): anuncio Click to WhatsApp -> a pessoa manda mensagem -> a **Evolution API**
 entrega a mensagem crua no nosso webhook, com o `ctwaClid` do anuncio -> o lead
 fica gravado com a atribuicao -> quando o ATENDENTE responde com a palavra-chave
 configurada, o evento sai pro Meta com o valor certo.
@@ -32,13 +36,15 @@ from app import auth, auto_sync
 from app import numbers as numbers_service
 from app import state_watch
 from app.db import SessionLocal, init_db
-from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect
+from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect, TrackingEvent
 from app.routers import auth as auth_router
+from app.routers import collect as collect_router
 from app.routers import config as config_router
 from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
 from app.routers import crm as crm_router
 from app.routers import evolution as evolution_router
+from app.routers import journeys as journeys_router
 from app.routers import numbers as numbers_router
 from app.routers import prospecting as prospecting_router
 from app.routers import rules as rules_router
@@ -46,7 +52,7 @@ from app.routers import webhook as webhook_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-app = FastAPI(title="WhatsApp Conversion Tracker", version="0.1.0")
+app = FastAPI(title="Rastreador de Jornada do Lead", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,6 +72,7 @@ _admin_only = [Depends(auth.require_admin)]
 app.include_router(auth_router.router)
 
 # --- rastreamento: o que a tela principal usa, pra qualquer usuario logado ---
+app.include_router(journeys_router.router, dependencies=_logged_in)
 app.include_router(evolution_router.router, dependencies=_logged_in)
 app.include_router(rules_router.router, dependencies=_logged_in)
 app.include_router(crm_router.router, dependencies=_logged_in)
@@ -80,6 +87,8 @@ app.include_router(prospecting_router.router, dependencies=_admin_only)
 # --- publico: quem chama e a Evolution/Meta, autenticando pelo token da URL ou
 # pela assinatura do payload ---
 app.include_router(webhook_router.router)
+# --- publico: a tag do site e o coletor de eventos da jornada (/t/*) ---
+app.include_router(collect_router.router)
 
 
 @app.on_event("startup")
@@ -175,6 +184,26 @@ async def stats(number_id: int | None = Query(default=None)):
         ).scalar_one()
         numbers_count = len(await numbers_service.list_numbers(session, channel="evolution"))
         rules_count = (await session.execute(select(func.count(KeywordRule.id)))).scalar_one()
+        journeys = (
+            await session.execute(
+                scoped(select(func.count(func.distinct(TrackingEvent.transaction_id))), TrackingEvent)
+            )
+        ).scalar_one()
+        wa_clicks = (
+            await session.execute(
+                scoped(
+                    select(func.count(func.distinct(TrackingEvent.transaction_id))).where(
+                        TrackingEvent.event_name == "click_whatsapp"
+                    ),
+                    TrackingEvent,
+                )
+            )
+        ).scalar_one()
+        journey_leads = (
+            await session.execute(
+                scoped(select(func.count(Contact.id)).where(Contact.transaction_id.is_not(None)), Contact)
+            )
+        ).scalar_one()
         rule_conversions = (
             await session.execute(
                 scoped(
@@ -197,4 +226,7 @@ async def stats(number_id: int | None = Query(default=None)):
         "numbers": numbers_count,
         "rules": rules_count,
         "rule_conversions": rule_conversions,
+        "journeys": journeys,
+        "whatsapp_clicks": wa_clicks,
+        "journey_leads": journey_leads,
     }

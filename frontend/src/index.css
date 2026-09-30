@@ -1,18 +1,26 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-ink-950: #0a0d0c;
-  --color-ink-900: #101514;
-  --color-ink-850: #151b1a;
-  --color-ink-800: #1c2422;
-  --color-ink-700: #2a3533;
-  --color-ink-500: #6b807c;
-  --color-ink-300: #a9bab6;
-  --color-ink-100: #e6efec;
-  --color-wa-500: #25d366;
+  /* A paleta do sistema inteiro é a do WhatsApp Web no tema escuro — a mesma da
+   * visualização de conversas do CRM. Os tons `ink` são as superfícies e textos
+   * do WhatsApp; `wa` é o verde da marca e o verde-petróleo da bolha enviada. */
+  --color-ink-950: #0b141a; /* fundo da conversa / fundo do app */
+  --color-ink-900: #111b21; /* painéis (lista de conversas, barra lateral) */
+  --color-ink-850: #202c33; /* cabeçalhos, campos e bolha recebida */
+  --color-ink-800: #222d34; /* divisórias */
+  --color-ink-700: #2a3942; /* hover e bordas de destaque */
+  --color-ink-600: #374248;
+  --color-ink-500: #8696a0; /* texto secundário */
+  --color-ink-400: #99a6ae;
+  --color-ink-300: #aebac1; /* ícones e texto de apoio */
+  --color-ink-200: #d1d7db;
+  --color-ink-100: #e9edef; /* texto principal */
+  --color-wa-400: #53bdeb; /* azul do "visto" e dos links do WhatsApp */
+  --color-wa-500: #25d366; /* verde WhatsApp */
   --color-wa-600: #1eb655;
-  --color-wa-900: #0b3d21;
-  /* visualização de conversas do CRM: a paleta do WhatsApp Web no tema escuro */
+  --color-wa-700: #00a884; /* verde-petróleo dos botões do WhatsApp Web */
+  --color-wa-900: #005c4b; /* bolha enviada */
+  /* visualização de conversas do CRM: os mesmos tons, com o nome do WhatsApp */
   --color-chat-bg: #0b141a;
   --color-chat-panel: #111b21;
   --color-chat-header: #202c33;
@@ -22,6 +30,34 @@
   --color-chat-out: #005c4b;
   --color-chat-text: #e9edef;
   --color-chat-muted: #8696a0;
+  /* cores de apoio também no tom do WhatsApp Web: vermelho de erro, amarelo de
+   * aviso, azul do "visto"/links e as cores dos nomes nos grupos */
+  --color-red-200: #f8a5ae;
+  --color-red-300: #f15c6d;
+  --color-red-400: #f15c6d;
+  --color-red-800: #7a2a33;
+  --color-red-900: #5c1f27;
+  --color-red-950: #2a1216;
+  --color-amber-200: #ffe2a6;
+  --color-amber-300: #ffd279;
+  --color-amber-400: #ffbc38;
+  --color-amber-800: #6b5320;
+  --color-amber-900: #4d3c17;
+  --color-amber-950: #2a2110;
+  --color-sky-300: #53bdeb;
+  --color-sky-800: #1d5f7c;
+  --color-sky-900: #144e66;
+  --color-sky-950: #0f2a36;
+  --color-blue-300: #7fcaf5;
+  --color-blue-800: #1d5f7c;
+  --color-blue-900: #144e66;
+  --color-blue-950: #0f2a36;
+  --color-violet-300: #a791ff;
+  --color-violet-800: #3f356b;
+  --color-violet-950: #1d1a33;
+  --color-pink-300: #ff72a1;
+  --color-pink-800: #6b2842;
+  --color-pink-950: #2e131d;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -43,7 +79,7 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-ink-700);
+  background: #374045;
   border-radius: 6px;
 }
 ::-webkit-scrollbar-track {

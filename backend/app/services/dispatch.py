@@ -51,10 +51,13 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion) -> dict:
             "Use um lead vindo de anuncio Click to WhatsApp (ou o simulador)."
         )
     user_data = payload["data"][0]["user_data"]
-    if not (user_data.get("page_id") or user_data.get("whatsapp_business_account_id")):
+    if not user_data.get("whatsapp_business_account_id"):
+        has_page = bool(meta_capi.business_ids(cfg)["page_id"])
         raise meta_capi.CapiError(
-            "Linha sem Page ID nem WABA ID — o Meta exige um dos dois em evento do WhatsApp. "
-            "Preencha o Page ID da página que roda os anúncios em Rastreamento > Meta."
+            "Linha sem WhatsApp Business Account ID (WABA) — o Meta exige ele em evento do WhatsApp"
+            + (" (o Page ID preenchido não serve: ele é do Messenger)" if has_page else "")
+            + ". Pegue em Business Manager > Configurações do negócio > Contas > Contas do WhatsApp "
+            "e preencha em Rastreamento > Meta."
         )
     return payload
 

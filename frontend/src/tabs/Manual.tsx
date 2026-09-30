@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react'
 
-import { api, numbersApi, type ConfigResponse, type WaNumber } from '../api'
-import { Badge, Banner, Button, Card, Copy, Field, Input } from '../ui'
+import {
+  api,
+  crmApi,
+  numbersApi,
+  OBJECTIVE_EVENT,
+  type ConfigResponse,
+  type CrmContact,
+  type WaNumber,
+} from '../api'
+import { useNumber } from '../numberContext'
+import { Badge, Banner, Button, Card, Copy, Field, Input, Json, Select, Toggle } from '../ui'
 
 const SECTIONS = [
   { id: 'fluxo', label: 'Como funciona' },
   { id: 'checklist', label: 'O que falta configurar' },
   { id: 'passos', label: 'Passo a passo' },
+  { id: 'retorno', label: 'O que volta pro Meta' },
   { id: 'testar', label: 'Testar sem anúncio' },
   { id: 'google', label: 'O caso do Google Ads' },
   { id: 'glossario', label: 'Glossário' },
@@ -125,6 +135,222 @@ function Group({ title, items, onGo }: { title: string; items: Item[]; onGo?: ()
             abrir aba
           </Button>
         </div>
+      )}
+    </div>
+  )
+}
+
+/* ---------- o que volta pro Meta ---------- */
+
+type Need = 'obrigatório' | 'recomendado' | 'opcional' | 'Purchase'
+
+const NEED_TONE: Record<Need, 'bad' | 'warn' | 'neutral' | 'info'> = {
+  obrigatório: 'bad',
+  recomendado: 'warn',
+  opcional: 'neutral',
+  Purchase: 'info',
+}
+
+/** Cada campo do evento: o que é, se é obrigatório e de onde a plataforma tira o valor. */
+const CAPI_FIELDS: { field: string; need: Need; what: string; from: string }[] = [
+  {
+    field: 'event_name',
+    need: 'obrigatório',
+    what: 'O evento padrão do Meta: Lead, Purchase, Schedule, Contact…',
+    from: 'A regra de palavra-chave, o disparo manual ou o objetivo da campanha (Cadastros → Lead, Vendas → Purchase).',
+  },
+  {
+    field: 'event_time',
+    need: 'obrigatório',
+    what: 'Unix timestamp em segundos de quando a conversão aconteceu. Evento com mais de 7 dias é recusado.',
+    from: 'A hora em que a conversão foi registrada aqui.',
+  },
+  {
+    field: 'action_source',
+    need: 'obrigatório',
+    what: 'Tem que ser business_messaging. Com website ou outro valor, o Meta não liga o evento ao clique no anúncio.',
+    from: 'Fixo.',
+  },
+  {
+    field: 'messaging_channel',
+    need: 'obrigatório',
+    what: 'whatsapp — diz em qual app de mensagem a conversa aconteceu.',
+    from: 'Fixo.',
+  },
+  {
+    field: 'user_data.ctwa_clid',
+    need: 'obrigatório',
+    what: 'O identificador do clique no anúncio. Vai EM CLARO, sem hash. Sem ele o evento não é atribuído a campanha nenhuma.',
+    from: 'contextInfo.externalAdReply.ctwaClid da primeira mensagem do lead, gravado quando ela chega.',
+  },
+  {
+    field: 'user_data.whatsapp_business_account_id',
+    need: 'obrigatório',
+    what: 'O WABA ID: a conta do WhatsApp Business do número que recebeu o clique. Sem ele o Meta recusa (code 100 / subcode 2804116). Page ID NÃO serve — no evento de WhatsApp ele é ignorado, é o identificador do Messenger.',
+    from: 'Rastreamento → Meta → WABA ID. Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta.',
+  },
+  {
+    field: 'user_data.ph',
+    need: 'recomendado',
+    what: 'Telefone do lead com DDI, só dígitos, em SHA-256. Melhora o casamento do evento com a pessoa.',
+    from: 'O número da conversa, hasheado aqui antes de sair.',
+  },
+  {
+    field: 'event_id',
+    need: 'recomendado',
+    what: 'Chave única do evento. O Meta deduplica por ela, então o reenvio não conta duas vezes.',
+    from: 'Gerado por conversão (wa-<lead>-<aleatório>) e mantido no retry.',
+  },
+  {
+    field: 'custom_data.value + currency',
+    need: 'Purchase',
+    what: 'Valor e moeda. Obrigatórios em Purchase; nos outros eventos, opcionais — mas é o que alimenta otimização por valor.',
+    from: 'Valor fixo da regra, valor extraído da mensagem do atendente (R$ 1.250,00) ou digitado no disparo manual.',
+  },
+  {
+    field: 'test_event_code',
+    need: 'opcional',
+    what: 'No nível de cima, fora de data. Manda o evento para Test Events sem afetar a otimização.',
+    from: 'Rastreamento → Meta → Test Event Code, só quando o disparo está em modo teste.',
+  },
+]
+
+const EXAMPLE_PAYLOAD = {
+  data: [
+    {
+      event_name: 'Lead',
+      event_time: 1790000000,
+      event_id: 'wa-42-3f9c1a7b2e10',
+      action_source: 'business_messaging',
+      messaging_channel: 'whatsapp',
+      user_data: {
+        ctwa_clid: 'ARAkLkA8rmlFeiCktEJQ-QTwRiyYHAFDLMNDBH0CD3qpjd0HR4irJ6LEkR7JwFF4XvnO2E4Nf8-…',
+        whatsapp_business_account_id: '109876543210987',
+        ph: ['9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'],
+      },
+      custom_data: { value: 1250.0, currency: 'BRL' },
+    },
+  ],
+  test_event_code: 'TEST12345',
+}
+
+/** Monta o payload de verdade com um lead da linha — sem enviar nada. */
+function LivePayload() {
+  const { numberId, current } = useNumber()
+  const [leads, setLeads] = useState<CrmContact[]>([])
+  const [leadId, setLeadId] = useState<number | null>(null)
+  const [event, setEvent] = useState(OBJECTIVE_EVENT)
+  const [value, setValue] = useState('')
+  const [isTest, setIsTest] = useState(true)
+  const [out, setOut] = useState<unknown>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setOut(null)
+    void crmApi
+      .contacts({ number_id: numberId, only_attributed: true })
+      .then((rows) => {
+        const withClid = rows.filter((c) => c.attributable_meta)
+        setLeads(withClid)
+        setLeadId(withClid[0]?.id ?? null)
+      })
+      .catch(() => setLeads([]))
+  }, [numberId])
+
+  const lead = leads.find((c) => c.id === leadId)
+
+  return (
+    <div className="space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-ink-100">
+          Montar com um lead real{current ? ` · ${current.label}` : ''}
+        </h3>
+        <Badge>não envia nada</Badge>
+      </div>
+      {leads.length === 0 ? (
+        <p className="text-[11px] leading-relaxed text-ink-500">
+          Nenhum lead com <C>ctwa_clid</C> nesta linha ainda. Use <em>Leads → Simular lead</em> para criar um com
+          anúncio e voltar aqui.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-[1fr_190px_110px]">
+            <Field label="Lead">
+              <Select value={leadId ?? ''} onChange={(e) => setLeadId(Number(e.target.value))}>
+                {leads.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name ?? c.phone_e164 ?? c.wa_id}
+                    {c.source.campaign_name ? ` — ${c.source.campaign_name}` : ''}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Evento">
+              <Select value={event} onChange={(e) => setEvent(e.target.value)}>
+                <option value={OBJECTIVE_EVENT}>
+                  Pelo objetivo{lead ? ` (${lead.source.suggested_event})` : ''}
+                </option>
+                {['Lead', 'Contact', 'Schedule', 'Purchase', 'InitiateCheckout', 'CompleteRegistration'].map((e) => (
+                  <option key={e} value={e}>
+                    {e}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Valor">
+              <Input type="number" placeholder="0,00" value={value} onChange={(e) => setValue(e.target.value)} />
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <Toggle checked={isTest} onChange={setIsTest} label="Modo teste (test_event_code)" />
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy || !leadId}
+              onClick={async () => {
+                setBusy(true)
+                setError(null)
+                try {
+                  const r = await api.preview({
+                    contact_id: leadId,
+                    event_name: event,
+                    value: value === '' ? null : Number(value),
+                    is_test: isTest,
+                  })
+                  setOut(r.meta_capi)
+                } catch (e) {
+                  setError((e as Error).message)
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              {busy ? 'montando…' : 'Montar payload'}
+            </Button>
+          </div>
+          {error && <Banner tone="bad">{error}</Banner>}
+          {out !== null && (
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-ink-300">
+                  POST /{'{'}dataset_id{'}'}/events — corpo que sairia
+                </span>
+                <Copy text={JSON.stringify(out, null, 2)} />
+              </div>
+              <Json value={out} max={360} />
+              {!(out as { data?: { user_data?: Record<string, unknown> }[] })?.data?.[0]?.user_data
+                ?.whatsapp_business_account_id && (
+                <div className="mt-2">
+                  <Banner tone="warn">
+                    Sem <C>whatsapp_business_account_id</C>: o Meta recusaria este evento. Preencha o WABA ID em
+                    Rastreamento → Meta.
+                  </Banner>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -395,6 +621,124 @@ export default function Manual({ onNavigate }: { onNavigate: (tab: string) => vo
               </P>
             </Step>
           </ol>
+        </Section>
+
+        {/* ---- o que volta pro Meta ---- */}
+        <Section
+          id="retorno"
+          title="O que mandar de volta pro Meta"
+          subtitle="O evento de conversão da Conversions API para conversa vinda de Click to WhatsApp — campo a campo."
+        >
+          <div className="space-y-5">
+            <P>
+              A conversão volta para o Meta como um <strong className="text-ink-100">evento da Conversions API</strong>,
+              enviado do servidor (sem pixel, sem navegador). O que liga esse evento à campanha é o{' '}
+              <C>ctwa_clid</C> que chegou na primeira mensagem do lead — por isso ele é o campo que mais importa.
+            </P>
+
+            <div className="space-y-2 rounded-lg border border-ink-800 bg-ink-950 p-3">
+              <p className="text-[11px] font-medium text-ink-300">Para onde</p>
+              <code className="block break-all font-mono text-[12px] text-wa-500">
+                POST https://graph.facebook.com/v21.0/{'{DATASET_ID}'}/events?access_token={'{TOKEN_DA_CAPI}'}
+              </code>
+              <p className="text-[11px] leading-relaxed text-ink-500">
+                <C>DATASET_ID</C> é o Pixel / Dataset do Events Manager ligado à página dos anúncios.{' '}
+                <C>TOKEN_DA_CAPI</C> é gerado em Events Manager → Configurações → Conversions API. Os dois ficam em{' '}
+                <strong className="text-ink-300">Rastreamento → Meta</strong>, por linha.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-ink-300">Corpo do POST (exemplo)</span>
+                <Copy text={JSON.stringify(EXAMPLE_PAYLOAD, null, 2)} />
+              </div>
+              <Json value={EXAMPLE_PAYLOAD} max={420} />
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[620px] text-left text-xs">
+                <thead>
+                  <tr className="border-b border-ink-800 text-[11px] uppercase tracking-wide text-ink-500">
+                    <th className="py-2 pr-3 font-medium">Campo</th>
+                    <th className="py-2 pr-3 font-medium">Precisa?</th>
+                    <th className="py-2 pr-3 font-medium">O que é</th>
+                    <th className="py-2 font-medium">De onde a plataforma tira</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-800 align-top">
+                  {CAPI_FIELDS.map((f) => (
+                    <tr key={f.field}>
+                      <td className="py-2.5 pr-3 font-mono text-[11px] text-wa-500">{f.field}</td>
+                      <td className="py-2.5 pr-3">
+                        <Badge tone={NEED_TONE[f.need]}>{f.need === 'Purchase' ? 'em Purchase' : f.need}</Badge>
+                      </td>
+                      <td className="py-2.5 pr-3 leading-relaxed text-ink-300">{f.what}</td>
+                      <td className="py-2.5 leading-relaxed text-ink-500">{f.from}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-ink-100">Qual evento mandar</h3>
+              <P>
+                Mande o evento que a campanha usa para otimizar. Uma campanha de Cadastros aprende com{' '}
+                <C>Lead</C>; uma de Vendas, com <C>Purchase</C> com valor. Mandar o evento errado não quebra nada, mas
+                a campanha não aprende com ele. O disparo <em>“pelo objetivo da campanha”</em> escolhe sozinho:
+              </P>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {[
+                  ['Cadastros (OUTCOME_LEADS)', 'Lead'],
+                  ['Vendas (OUTCOME_SALES)', 'Purchase + valor'],
+                  ['Engajamento / Tráfego / Reconhecimento', 'Contact'],
+                  ['Promoção do app', 'CompleteRegistration'],
+                ].map(([objective, ev]) => (
+                  <div
+                    key={objective}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2"
+                  >
+                    <span className="text-xs text-ink-300">{objective}</span>
+                    <span className="font-mono text-xs text-wa-500">{ev}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed text-ink-500">
+                O objetivo vem da Marketing API pelo ID do anúncio do lead, e precisa do token de anúncios (
+                <C>ads_read</C>) em Rastreamento → Meta. O mapa pode ser trocado por linha no mesmo lugar.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-ink-100">Quando o Meta recusa</h3>
+              <ul className="space-y-1.5 text-xs leading-relaxed text-ink-300">
+                <li>
+                  <C>code 100 / subcode 2804116</C> — faltou o <C>whatsapp_business_account_id</C>. A mensagem cita{' '}
+                  <C>page_id</C> também, mas no WhatsApp Page ID não resolve: só o WABA.
+                </li>
+                <li>
+                  <strong className="text-ink-100">Aceito, mas sem atribuição</strong> — o evento saiu sem{' '}
+                  <C>ctwa_clid</C> (lead que não veio de anúncio) ou com <C>action_source</C> diferente de{' '}
+                  <C>business_messaging</C>.
+                </li>
+                <li>
+                  <strong className="text-ink-100">event_time fora da janela</strong> — conversão com mais de 7 dias
+                  não é aceita; dispare no momento em que ela acontece.
+                </li>
+                <li>
+                  <strong className="text-ink-100">Não aparece em Test Events</strong> — o disparo não estava em modo
+                  teste, ou o Test Event Code não está preenchido na linha.
+                </li>
+                <li>
+                  <strong className="text-ink-100">ctwa_clid hasheado</strong> — ele vai em claro. Só telefone e
+                  e-mail vão em SHA-256.
+                </li>
+              </ul>
+            </div>
+
+            <LivePayload />
+          </div>
         </Section>
 
         {/* ---- testar ---- */}

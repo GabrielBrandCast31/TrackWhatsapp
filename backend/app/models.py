@@ -65,6 +65,9 @@ class WaNumber(Base):
     evo_owner_jid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # segredo na URL do webhook: e o que prova que o POST veio da SUA Evolution.
     webhook_token: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    # chave PUBLICA da tag do site (`/t/tl.js?k=`). Nao e segredo — vai no HTML de
+    # qualquer visitante —, so diz de qual linha e a jornada que chega no coletor.
+    site_key: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
 
     # cache do ultimo /status — evita bater na Graph API so pra desenhar a lista
     display_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -117,6 +120,26 @@ class Contact(Base):
     gbraid: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     utm: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # --- jornada no site (framework Web -> WhatsApp) ---
+    # O lead guarda so a REFERENCIA da jornada; a jornada inteira mora em
+    # `tracking_events` e e consultada pelo `transaction_id` (= TL_ID).
+    transaction_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    visitor_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_utm: Mapped[dict] = mapped_column(JSON, default=dict)   # aquisicao
+    last_utm: Mapped[dict] = mapped_column(JSON, default=dict)    # conversao
+    fbp: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    fbc: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ttclid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    landing_page: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # como a conversa foi ligada a jornada: transaction_id | protocol | temporal |
+    # probabilistic | manual. Todo match registra metodo e score.
+    match_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    whatsapp_arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone_number_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -151,6 +174,89 @@ class Contact(Base):
     @property
     def has_attribution(self) -> bool:
         return bool(self.ctwa_clid or self.gclid or self.wbraid or self.gbraid)
+
+
+class TrackingEvent(Base):
+    """Um evento da jornada do visitante no site — 1 linha por evento.
+
+    O campo de ligacao e `transaction_id` = TL_ID: tudo que acontece da primeira
+    visita ao clique no WhatsApp fica amarrado a ele, e e por ele que a conversa
+    que chega depois recupera de qual anuncio a pessoa veio.
+
+    Cada evento carrega a foto da atribuicao naquele momento (UTMs da URL, first
+    touch, last touch e os click ids). A regra "visita direta nao apaga origem
+    valida" e aplicada de novo no servidor ao montar a jornada (app.journey).
+    """
+
+    __tablename__ = "tracking_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # client_id do framework = a linha (cliente) dona do site
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+
+    # --- jornada ---
+    transaction_id: Mapped[str] = mapped_column(String(64), index=True)
+    visitor_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    # protocolo curto anexado ao clique (ex.: TL-8F3K2Q), quando o site prefere
+    # isso ao TL_ID inteiro na mensagem
+    protocol: Mapped[str | None] = mapped_column(String(24), index=True, nullable=True)
+
+    # --- evento ---
+    event_name: Mapped[str] = mapped_column(String(48), index=True)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    props: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # --- pagina ---
+    page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_referrer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    landing_page: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- UTMs: as da URL atual, o first touch e o last touch ---
+    utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_content: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_term: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_utm_medium: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_utm_content: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_utm_term: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_utm_medium: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_utm_content: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_utm_term: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- Meta / Google / TikTok ---
+    fbclid: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    fbp: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    fbc: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    gclid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gbraid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    wbraid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gad_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ttclid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ttp: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- GA4 ---
+    ga_client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ga_session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ga_session_number: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # --- tecnico ---
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # Etapas do CRM de conversa. A ordem aqui e a ordem das colunas do kanban.

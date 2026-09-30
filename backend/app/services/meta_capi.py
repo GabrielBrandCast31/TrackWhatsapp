@@ -5,19 +5,25 @@ Para conversa vinda de Click to WhatsApp o evento tem uma forma especifica:
   action_source     = "business_messaging"
   messaging_channel = "whatsapp"
   user_data.ctwa_clid = <clid que veio no referral do webhook>   # NAO hasheado
-  user_data.whatsapp_business_account_id = <waba_id da linha>   # OU
-  user_data.page_id = <pagina do Facebook ligada ao dataset>
+  user_data.whatsapp_business_account_id = <WABA ID da linha>  # obrigatorio
 
-O ctwa_clid e o que amarra a conversa de volta ao anuncio. O waba_id diz a qual
+O ctwa_clid e o que amarra a conversa de volta ao anuncio. O WABA ID diz a qual
 conta do WhatsApp Business aquele clique pertence — a Meta pede os dois juntos
-no evento de Click to WhatsApp, e o dataset de destino tem que ser o da propria
-WABA (`POST /{WABA_ID}/dataset`), nao um pixel de site.
+no evento de Click to WhatsApp.
 
-Sem um dos dois (`page_id` ou `whatsapp_business_account_id`) a Meta recusa o
-evento com code 100 / subcode 2804116. Linha da Evolution usa o app WhatsApp
-Business, sem WABA de Cloud API: ai o que vale e o Page ID da pagina que roda
-os anuncios e esta ligada ao dataset. Telefone e email, quando
-presentes, vao hasheados em SHA-256 (normalizados antes).
+`page_id` NAO serve aqui: na Conversions API for Business Messaging ele e o
+identificador do canal Messenger (junto com o PSID). Com
+`messaging_channel=whatsapp` e so `page_id`, a Meta recusa o evento com code 100 /
+subcode 2804116 ("sem page_id nem whatsapp_business_account_id") — a mensagem
+cita os dois porque e a mesma para todos os canais, mas no WhatsApp so o WABA
+vale. Esta plataforma mandava o Page ID quando ele estava preenchido, e era por
+isso que cliente com Page ID configurado continuava levando esse erro.
+
+Linha da Evolution usa o app WhatsApp Business: o WABA ID dela e o da conta do
+WhatsApp listada no Business Manager (Configuracoes do negocio -> Contas ->
+Contas do WhatsApp), que existe quando o app esta ligado ao portfolio para
+rodar anuncio Click to WhatsApp. Telefone e email, quando presentes, vao
+hasheados em SHA-256 (normalizados antes).
 """
 
 import hashlib
@@ -69,11 +75,11 @@ def build_payload(
     user_data: dict = {}
     if ctwa_clid:
         user_data["ctwa_clid"] = ctwa_clid
-    # um so: a Meta pede "o que estiver vinculado ao dataset", e mandar um id que
-    # nao esta ligado a ele pode fazer o evento ser recusado
-    if page_id:
-        user_data["page_id"] = str(page_id).strip()
-    elif waba_id:
+    # so o WABA: `page_id` e do canal Messenger e, num evento de WhatsApp, nao
+    # atende a exigencia (veja o topo do modulo). `page_id` continua aceito na
+    # assinatura para nao quebrar quem chama, mas nao entra no evento.
+    del page_id
+    if waba_id:
         user_data["whatsapp_business_account_id"] = str(waba_id).strip()
     hashed_phone = hash_phone(phone)
     if hashed_phone:
@@ -107,8 +113,8 @@ def build_payload(
 def business_ids(cfg: dict) -> dict:
     """`page_id` / `waba_id` da linha, na forma que `build_payload` recebe.
 
-    Page ID configurado vence; WABA vem do campo proprio ou, na linha Cloud API,
-    da credencial da linha.
+    O que vale no evento de WhatsApp e o WABA: do campo proprio ou, na linha
+    Cloud API, da credencial da linha. `page_id` segue aqui so para diagnostico.
     """
     return {
         "page_id": (cfg.get("meta_page_id") or "").strip() or None,

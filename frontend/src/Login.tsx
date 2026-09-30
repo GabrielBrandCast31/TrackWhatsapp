@@ -35,10 +35,10 @@ export default function Login() {
         <div className="mb-8 text-center">
           <Logo className="mx-auto mb-4 h-12 w-12" />
           <h1 className="text-xl font-semibold tracking-tight">
-            WhatsApp <span className="text-wa-500">Conversion Tracker</span>
+            Jornada do <span className="text-wa-500">Lead</span>
           </h1>
           <p className="mt-1.5 text-xs leading-relaxed text-ink-500">
-            Entre para ver as linhas, o rastreamento e as conversões.
+            Do anúncio ao site, do site ao WhatsApp, do WhatsApp ao lead.
           </p>
         </div>
 

@@ -1,11 +1,151 @@
-# WhatsApp Conversion Tracker — Evolution API
+# Rastreador de Jornada do Lead — Web → WhatsApp
 
-Rastreia conversa de WhatsApp vinda de anúncio **Click to WhatsApp** e devolve o evento
-de conversão para a campanha, com o valor certo, no momento certo.
+Liga a navegação do visitante no site ao lead que depois chama no WhatsApp — e recupera
+de qual anúncio ele veio. O WhatsApp deixa de ser um ponto cego e passa a fazer parte da
+mesma jornada de atribuição iniciada no anúncio.
 
-O canal é a **Evolution API**. É ela que entrega a mensagem crua do WhatsApp — e é na
-mensagem crua que vem o `ctwaClid`, o identificador que amarra a conversa ao anúncio.
-Sem ele o Meta não tem como atribuir nada.
+```
+Anúncio ──▶ Site ──▶ TL_ID ──▶ Navegação ──▶ Clique no WhatsApp ──▶ Conversa ──▶ Lead com origem
+Meta·Google   click IDs   gera /     page_view,     anexa tl=<TL_ID>      Evolution   UTMs, click IDs,
+·TikTok       + UTMs      recupera   serviços…      na mensagem           API         landing page
+```
+
+Implementa o *Framework de Rastreamento Web → WhatsApp* (PDF na raiz). Continua valendo
+tudo que já existia: anúncio **Click to WhatsApp** com `ctwaClid`, CRM por linha, regras de
+palavra-chave e o envio da conversão ao Meta — veja as seções abaixo de
+[Jornada do lead](#jornada-do-lead).
+
+O canal do WhatsApp é a **Evolution API**. Cada linha é uma instância da Evolution, com
+tag do site, Pixel, token e palavras-chave próprios. Um seletor no topo define a linha.
+
+## A tela
+
+| Aba | O que faz |
+|---|---|
+| **Jornadas** | o funil (jornadas → clique no WhatsApp → lead com origem), origem por mídia, método de match e cada jornada reconstruída |
+| **Tag do site** | o snippet da tag da linha, o que ela registra e o simulador de jornada inteira |
+| **Conexão** | cadastra a instância (URL, apikey, nome), pareia por QR e grava o webhook |
+| **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
+| **Atribuição** | por que a conversa ainda não vira campanha, o diagnóstico da base e o passo a passo pela Cloud API |
+| **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
+| **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
+| **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |
+| **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API, destinos extras e usuários (só perfil admin) |
+
+O painel inteiro fica atrás de **login** — veja [Login e usuários](#login-e-usuários).
+
+## Jornada do lead
+
+### 1. A tag do site
+
+Aba **Tag do site** → copie a linha e cole antes do `</head>` de todas as páginas:
+
+```html
+<script async src="https://seu.dominio/t/tl.js?k=CHAVE_DA_LINHA"></script>
+```
+
+A `k` é pública (vai no HTML de qualquer visitante): ela só diz de qual linha é a jornada.
+O nginx do painel faz proxy de `/t/` pro backend, então a tag e o coletor saem do mesmo
+domínio de `PUBLIC_BASE_URL`.
+
+**Identificação do visitante.** Ao entrar, a tag procura um `tl` (na URL, no cookie `_tl`,
+no `localStorage`, no `sessionStorage`). Existe? Reutiliza. Não existe? Gera um TL_ID
+(`1790195601229_17901956838213`) e persiste nos quatro lugares, mais `window.tracklabs`.
+**Nunca um ID novo por página** — isso quebraria a ligação primeira visita → páginas →
+clique → conversa.
+
+**Dados capturados** em cada evento (tabela `tracking_events`, 1 linha por evento):
+
+| Grupo | Campos |
+|---|---|
+| Jornada | `transaction_id` (= TL_ID), `visitor_id`, `session_id`, `event_id`, `event_name`, `event_time` |
+| Página | `page_url`, `page_path`, `page_title`, `page_referrer`, `landing_page`, `hostname` |
+| UTMs | as da URL atual + **first touch** (aquisição) + **last touch** (conversão) |
+| Meta | `fbclid`, `_fbp`, `_fbc` — `_fbc` só é montado quando existe um `fbclid` real |
+| Google | `gclid`, `gbraid`, `wbraid`, `gad_source` |
+| TikTok | `ttclid`, `_ttp` |
+| GA4 | `client_id`, `session_id`, `session_number` (dos cookies `_ga` / `_ga_*`) |
+| Técnico | IP e User-Agent (lidos no servidor) |
+
+**Eventos**: `page_view`, `click_whatsapp`, `click_phone` (`tel:`), `click_email`
+(`mailto:`), `click_instagram` e `form_start` / `form_submit` saem sozinhos;
+`view_service` sai em página marcada com `data-tl-service="implante"`; qualquer outro com
+`tracklabs.track('nome', { ... })`.
+
+**Propagação do `tl`.** Os links internos ganham `?tl=TL_ID`. No clique num link do
+WhatsApp (`wa.me`, `api.whatsapp.com` ou `window.open`), a tag registra `click_whatsapp` e
+anexa a referência na mensagem pré-preenchida:
+
+```
+Olá! Quero saber mais sobre implante.
+
+tl=1790195601229_17901956838213
+```
+
+Prefere algo discreto? `window.tracklabsConfig = { reference: 'protocol' }` antes da tag
+troca o `tl=` por um protocolo curto (`Protocolo: TL-8F3K2Q`). No CRM a referência técnica
+fica escondida atrás de uma etiqueta *jornada*.
+
+### 2. A conversa chega
+
+Quando a mensagem entra pela Evolution, o backend busca a jornada — sempre começando pelo
+TL_ID — e grava no lead a origem recuperada:
+
+| # | Método | Como | `match_score` |
+|---|---|---|---|
+| 1 | `transaction_id` | `tl=` na mensagem | 1.00 |
+| 2 | `protocol` | protocolo curto anexado ao clique | 0.95 |
+| 3 | `temporal` | um único `click_whatsapp` da linha na janela (`JOURNEY_MATCH_WINDOW_SECONDS`, 15 min) ainda sem lead | 0.75 |
+| 4 | `probabilistic` | vários cliques na janela: o mais próximo da mensagem | ≤ 0.50 |
+| — | `manual` | alguém ligou a conversa a um TL_ID no painel do CRM | 1.00 |
+
+3 e 4 só valem para **conversa nova** — uma conversa antiga nunca herda o clique de outra
+pessoa que acabou de chegar ao site. Clique já usado por um lead não é reaproveitado.
+
+O lead (`contacts`) guarda só a **referência**: `transaction_id`, `visitor_id`,
+`session_id`, first/last touch, `gclid`/`gbraid`/`wbraid`/`fbp`/`fbc`/`ttclid`,
+`landing_page`, `page_url`, `match_method`, `match_score` e `whatsapp_arrived_at`. A jornada
+completa é consultada em `tracking_events` pelo `transaction_id`. Atribuição que o lead já
+tinha (o `ctwa_clid` de um anúncio, por exemplo) nunca é apagada.
+
+### 3. Regra de atribuição
+
+Uma visita posterior sem informações **nunca apaga** uma atribuição válida: `google / cpc`
+na primeira visita e `direct / none` depois = origem mantida `google / cpc`. A regra vale na
+tag (o last touch só anda com UTM ou click id na URL) e de novo no servidor, que
+reconstrói first e last touch a partir dos eventos.
+
+### 4. O que a tela responde
+
+Aba **Jornadas** → clique numa jornada. Para cada conversa, o sistema responde as sete
+perguntas do framework: quem é o visitante (TL_ID), de qual mídia veio, de qual campanha,
+qual foi a página de entrada, quais páginas navegou, quando clicou no WhatsApp e qual
+conversa nasceu daquele clique. No **CRM**, o painel *Dados do contato* ganhou a seção
+*Jornada no site* com o mesmo resumo e a linha do tempo.
+
+### Testar sem site nem anúncio
+
+**Tag do site → Simular uma jornada inteira**: escolha a origem (Google Ads, Meta Ads,
+TikTok, orgânico, direto) e como a conversa chega (com `tl=`, com protocolo ou sem nada).
+O simulador grava 5 eventos de navegação e injeta a mensagem no mesmo caminho do webhook —
+o lead aparece no CRM com a origem recuperada.
+
+```bash
+cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_journey.py
+```
+
+### A paleta
+
+O painel inteiro usa a paleta do WhatsApp Web no tema escuro — a mesma da visualização de
+conversas do CRM (`#0b141a`, `#111b21`, `#202c33`, `#e9edef`, `#8696a0`, verde `#25d366` e
+o verde-petróleo `#005c4b` da bolha enviada). Os tokens ficam em `frontend/src/index.css`.
+
+## Anúncio Click to WhatsApp (sem site no meio)
+
+Quando o anúncio leva direto pro WhatsApp, não há site nem TL_ID: quem entrega a
+atribuição é a mensagem crua, que a **Evolution API** repassa — e é nela que vem o
+`ctwaClid`, o identificador que amarra a conversa ao anúncio. Sem ele o Meta não tem como
+atribuir nada.
 
 ```
 anúncio CTWA ──clique──▶ WhatsApp ──Evolution API──▶ esta plataforma ──evento──▶ Meta
@@ -20,23 +160,6 @@ aconteceu de verdade — "Agradecemos a confiança", "Seu horário está confirm
 cadastra esse termo, e o evento sai sozinho quando ele aparecer. Cada regra tem um
 **simulador**: cole a mensagem e veja, antes de valer no chat, se dispararia e com que
 valor.
-
-Cada linha é uma **instância da Evolution**, com Pixel, token e palavras-chave próprios.
-Um seletor no topo do painel define qual linha você está olhando.
-
-## A tela
-
-| Aba | O que faz |
-|---|---|
-| **Conexão** | cadastra a instância (URL, apikey, nome), pareia por QR e grava o webhook |
-| **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
-| **Atribuição** | por que a conversa ainda não vira campanha, o diagnóstico da base e o passo a passo pela Cloud API |
-| **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
-| **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
-| **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |
-| **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API, destinos extras e usuários (só perfil admin) |
-
-O painel inteiro fica atrás de **login** — veja [Login e usuários](#login-e-usuários).
 
 ## Subir
 
@@ -143,6 +266,7 @@ Aba **Rastreamento** → *Meta — Pixel e token da API*, por linha:
 | Pixel / Dataset ID | Events Manager → sua fonte de dados → Configurações |
 | Token da API de Conversões | Events Manager → Configurações → Gerar token de acesso |
 | Test Event Code | Events Manager → Test Events (usado só nas regras marcadas como teste) |
+| WhatsApp Business Account ID (WABA) | Business Manager → Configurações do negócio → Contas → Contas do WhatsApp. **Obrigatório**: sem ele o Meta recusa o evento (code 100 / subcode 2804116). Page ID não serve — no canal WhatsApp ele é ignorado |
 
 O evento sai assim:
 
@@ -151,7 +275,11 @@ O evento sai assim:
   "event_name": "Lead",
   "action_source": "business_messaging",
   "messaging_channel": "whatsapp",
-  "user_data": { "ctwa_clid": "...", "ph": ["<sha256 do telefone>"] },
+  "user_data": {
+    "ctwa_clid": "...",
+    "whatsapp_business_account_id": "<WABA ID>",
+    "ph": ["<sha256 do telefone>"]
+  },
   "custom_data": { "value": 1250.0, "currency": "BRL" }
 }
 ```
@@ -465,6 +593,9 @@ rebaixado pelo automático.
 ```
 backend/app/
   __init__.py             carrega o .env antes de qualquer submodulo
+  journey.py              jornada do lead: TL_ID, first/last touch, match da conversa
+                          (transaction_id -> protocolo -> temporal) e o resumo da jornada
+  static/tl.js            a tag do site (servida em /t/tl.js com a chave da linha)
   main.py                 app, /api/health, /api/stats e o include dos routers
                           (é aqui que cada grupo ganha a dependência de login/admin)
   auth.py                 hash de senha, emissão/validação de JWT e as dependências
@@ -484,6 +615,8 @@ backend/app/
                           prospects, prospect_searches, outreaches
   migrations.py           ALTER TABLE idempotente rodado no startup
   routers/
+    collect.py            publico: /t/tl.js e /t/collect (eventos da tag, sem login)
+    journeys.py           funil, lista, detalhe, jornada do contato, ligar à mão e simulador
     evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
     rules.py              regras de palavra-chave + /simulate
     crm.py                conversas da linha: etapa, nota, sync, resposta, disparo e o
@@ -511,6 +644,7 @@ backend/tests/
   test_auth.py            fumaça do login: 401 sem token, papéis, refresh, troca de senha
   test_payload.py         webhook -> mensagem -> payload cru servido sob demanda
   test_campaigns.py       etiqueta de origem, cache de campanha e evento pelo objetivo
+  test_journey.py         coletor, regra de atribuição e os três métodos de match
 ```
 
 ## Notas

@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import campaigns
+from app import campaigns, journey
 from app import numbers as numbers_service
 from app import settings_store
 from app.firing import already_fired, fire_event
@@ -441,6 +441,15 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
             if not from_me and not contact.first_message and text:
                 contact.first_message = text
+
+            if not from_me:
+                # jornada do site: o TL_ID (ou protocolo) anexado ao clique no
+                # WhatsApp liga a conversa a navegacao — e recupera a origem
+                matched = await journey.attach_journey(
+                    session, contact, text, sent_at_of(message), is_new=created
+                )
+                if matched:
+                    result.setdefault("journeys", []).append({"contact_id": contact.id, **matched})
             if contact.source_id:
                 ad_ids.add(contact.source_id)
 
@@ -516,6 +525,8 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
         parts.append(f"{result['messages']} msg(s), {result['new_contacts']} lead(s) novo(s)")
     if fired:
         parts.append(f"{len(fired)} evento(s) disparado(s) por regra")
+    if result.get("journeys"):
+        parts.append(f"{len(result['journeys'])} lead(s) ligado(s) à jornada do site")
     if result["ignored"]:
         parts.append(result["ignored"])
     summary = " — ".join(parts)

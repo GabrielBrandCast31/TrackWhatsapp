@@ -288,6 +288,9 @@ export type WaNumber = {
 export type Orphans = { contacts: number; prospects: number; searches: number; total: number }
 
 export type Stats = {
+  journeys?: number
+  whatsapp_clicks?: number
+  journey_leads?: number
   numbers: number
   contacts: number
   attributed_contacts: number
@@ -552,6 +555,8 @@ export type CrmContact = {
   attributable_google: boolean
   /** de onde o lead veio: canal, campanha, objetivo e o evento que ele pede */
   source: LeadSource
+  /** referência à jornada do site (TL_ID) e como a conversa foi ligada a ela */
+  journey?: LeadJourneyRef
 }
 
 export type LeadChannel = 'meta_ads' | 'google_ads' | 'utm' | 'organic' | 'agenda' | 'simulado'
@@ -987,4 +992,176 @@ export const DESTINATION_LABEL: Record<string, string> = {
   meta_capi: 'Meta CAPI',
   google_ads: 'Google Ads',
   webhook: 'Webhook',
+}
+
+/* -------------------------------------------------------------------------- */
+/*  jornada do lead: site (TL_ID) -> WhatsApp -> lead                          */
+/* -------------------------------------------------------------------------- */
+
+export type MatchMethod = 'transaction_id' | 'protocol' | 'temporal' | 'probabilistic' | 'manual'
+
+export type Touch = { source?: string; medium?: string; campaign?: string; content?: string; term?: string }
+
+export type JourneyOrigin = {
+  channel: 'google_ads' | 'meta_ads' | 'tiktok_ads' | 'organic' | 'social' | 'referral' | 'utm' | 'direct'
+  label: string
+}
+
+export type LeadJourneyRef = {
+  transaction_id: string | null
+  visitor_id: string | null
+  session_id: string | null
+  first_utm: Touch
+  last_utm: Touch
+  fbp: string | null
+  fbc: string | null
+  ttclid: string | null
+  landing_page: string | null
+  page_url: string | null
+  match_method: MatchMethod | null
+  match_label: string | null
+  match_score: number | null
+  whatsapp_arrived_at: string | null
+}
+
+export type JourneyLead = LeadJourneyRef & {
+  id: number
+  name: string | null
+  wa_id: string
+  phone_e164: string | null
+  stage: CrmStage
+  wa_number_id: number | null
+  created_at: string
+}
+
+export type JourneySummary = {
+  transaction_id: string
+  visitor_id: string | null
+  session_ids: string[]
+  wa_number_id: number | null
+  started_at: string
+  last_event_at: string
+  events: number
+  page_views: number
+  landing_page: string | null
+  hostname: string | null
+  pages: string[]
+  first_touch: Touch
+  last_touch: Touch
+  origin: JourneyOrigin
+  first_origin: JourneyOrigin
+  click_ids: Record<string, string>
+  ga: Record<string, string>
+  clicked_whatsapp_at: string | null
+  whatsapp_clicks: number
+  protocol: string | null
+  ip: string | null
+  user_agent: string | null
+}
+
+export type JourneyRow = JourneySummary & { lead: JourneyLead | null }
+
+export type JourneyEvent = {
+  id: number
+  event_id: string | null
+  event_name: string
+  label: string
+  event_time: string
+  session_id: string | null
+  page_url: string | null
+  page_path: string | null
+  page_title: string | null
+  page_referrer: string | null
+  utm: Touch
+  click_ids: Record<string, string>
+  props: Record<string, unknown>
+  protocol: string | null
+}
+
+export type JourneyDetail = {
+  summary: (JourneySummary & { events: number }) | null
+  events: JourneyEvent[]
+  lead: JourneyLead | null
+  answers: { q: string; a: string | null; how: string }[]
+}
+
+export type JourneyOverview = {
+  days: number
+  journeys: number
+  visitors: number
+  page_views: number
+  whatsapp_clicks: number
+  matched_leads: number
+  conversations: number
+  match_rate: number | null
+  click_to_lead: number | null
+  events_by_name: Record<string, number>
+  by_origin: { label: string; channel: JourneyOrigin['channel']; journeys: number; clicks: number; leads: number }[]
+  by_method: { method: MatchMethod; label: string; leads: number }[]
+  landing_pages: { page: string; journeys: number }[]
+  daily: { day: string; journeys: number; clicks: number; leads: number }[]
+}
+
+export type TagSetup = {
+  number_id: number
+  site_key: string
+  script_url: string
+  collect_url: string
+  snippet: string
+  match_window_seconds: number
+  last_event_at?: string | null
+  last_event_host?: string | null
+  last_event_url?: string | null
+}
+
+export type JourneyFilters = {
+  number_id?: number
+  status?: 'all' | 'lead' | 'clicked' | 'browsing'
+  q?: string
+  days?: number
+}
+
+export const journeysApi = {
+  overview: (numberId?: number, days = 30) =>
+    request<JourneyOverview>(`/api/journeys/overview${qs({ number_id: numberId, days })}`),
+  list: (filters: JourneyFilters = {}) => request<JourneyRow[]>(`/api/journeys${qs(filters)}`),
+  get: (tl: string, numberId?: number) =>
+    request<JourneyDetail>(`/api/journeys/${encodeURIComponent(tl)}${qs({ number_id: numberId })}`),
+  forContact: (contactId: number) => request<JourneyDetail>(`/api/journeys/contact/${contactId}`),
+  link: (contactId: number, transaction_id: string) =>
+    request<JourneyDetail>(`/api/journeys/contact/${contactId}/link`, {
+      method: 'POST',
+      body: JSON.stringify({ transaction_id }),
+    }),
+  unlink: (contactId: number) =>
+    request<{ ok: boolean }>(`/api/journeys/contact/${contactId}/link`, { method: 'DELETE' }),
+  setup: (numberId: number) => request<TagSetup>(`/api/journeys/setup${qs({ number_id: numberId })}`),
+  rotateKey: (numberId: number) => request<TagSetup>(`/api/journeys/setup/${numberId}/rotate`, { method: 'POST' }),
+  simulate: (payload: Record<string, unknown>) =>
+    request<{ transaction_id: string; protocol: string; contact_ids?: number[]; summary?: string }>(
+      '/api/journeys/simulate',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+}
+
+export const MATCH_TONE: Record<MatchMethod, 'good' | 'info' | 'warn' | 'neutral'> = {
+  transaction_id: 'good',
+  protocol: 'good',
+  temporal: 'info',
+  probabilistic: 'warn',
+  manual: 'neutral',
+}
+
+/** Remove a referência técnica (`tl=...` / protocolo) do texto mostrado no chat. */
+export function stripJourneyRef(text: string | null): { text: string | null; ref: string | null } {
+  if (!text) return { text, ref: null }
+  const tl = text.match(/(?<![A-Za-z0-9_])tl\s*[=:]\s*([A-Za-z0-9][A-Za-z0-9_-]{7,63})/i)
+  const protocol = text.match(/\bTL-[A-Z0-9]{6}\b/)
+  if (!tl && !protocol) return { text, ref: null }
+  const cleaned = text
+    .replace(/(?<![A-Za-z0-9_])tl\s*[=:]\s*[A-Za-z0-9][A-Za-z0-9_-]{7,63}/gi, '')
+    .replace(/\(?\s*(?:protocolo\s*:?\s*)?\bTL-[A-Z0-9]{6}\b\s*\)?/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return { text: cleaned, ref: tl ? tl[1] : protocol![0] }
 }

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import campaigns as campaigns_service
+from app import journey as journey_service
 from app import crm as crm_service
 from app import numbers as numbers_service
 from app import settings_store
@@ -81,6 +82,8 @@ def serialize(
         "attributable_google": bool(contact.gclid or contact.wbraid or contact.gbraid),
         # etiqueta "de onde veio": canal, campanha, objetivo e o evento que ele pede
         "source": campaigns_service.lead_source(contact, campaign, cfg),
+        # referencia a jornada do site (TL_ID, first/last touch, metodo do match)
+        "journey": journey_service.contact_journey_fields(contact),
     }
 
 

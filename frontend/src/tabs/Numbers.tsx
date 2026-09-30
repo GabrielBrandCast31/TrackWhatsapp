@@ -46,9 +46,9 @@ const OVERRIDE_FIELDS: { key: string; label: string; hint?: string; secret?: boo
   { key: 'meta_capi_token', label: 'Meta CAPI Token', secret: true },
   { key: 'meta_test_event_code', label: 'Código de evento de teste' },
   {
-    key: 'meta_page_id',
-    label: 'Meta Page ID',
-    hint: 'Página ligada ao dataset. O Meta exige Page ID ou WABA em evento do WhatsApp.',
+    key: 'meta_waba_id',
+    label: 'WhatsApp Business Account ID (WABA)',
+    hint: 'Obrigatório no evento do WhatsApp. Em branco, usa o WABA ID da própria linha da Cloud API.',
   },
   { key: 'google_customer_id', label: 'Google Ads Customer ID', hint: 'Sem traços.' },
   { key: 'google_conversion_action_id', label: 'Google Conversion Action ID' },

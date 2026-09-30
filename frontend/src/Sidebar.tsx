@@ -9,7 +9,7 @@ export type NavItem = {
   Icon: ComponentType<{ className?: string }>
 }
 
-const VERSION = 'v.1.0.0'
+const VERSION = 'v.2.0.0'
 
 function Item({
   item,
@@ -103,8 +103,8 @@ export default function Sidebar({
           <Logo />
           {!collapsed && (
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-sm font-semibold text-ink-100">Conversion</p>
-              <p className="truncate text-[11px] text-wa-500">Tracker</p>
+              <p className="truncate text-sm font-semibold text-ink-100">Jornada do Lead</p>
+              <p className="truncate text-[11px] text-wa-500">Web → WhatsApp</p>
             </div>
           )}
           {!collapsed && (
