@@ -169,6 +169,25 @@ export function IconRoute(p: Props) {
   )
 }
 
+/** Formulários — prancheta com linhas. */
+export function IconForm(p: Props) {
+  return (
+    <Svg {...p}>
+      <rect x="8" y="2" width="8" height="4" rx="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M9 12h6M9 16h4" />
+    </Svg>
+  )
+}
+
+/** Atendimento — gráfico de funil. */
+export function IconFunnel(p: Props) {
+  return (
+    <Svg {...p}>
+      <path d="M3 4h18l-7 8.5V19l-4 2v-8.5L3 4Z" />
+    </Svg>
+  )
+}
+
 /** Tag do site — sinais de código. */
 export function IconCode(p: Props) {
   return (

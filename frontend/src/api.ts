@@ -19,6 +19,8 @@ export type AuthUser = {
   active: boolean
   created_at: string
   last_login_at: string | null
+  /** linhas (clientes) que o usuário de operação enxerga; admin vê todas */
+  number_ids?: number[]
 }
 
 export type TokenPair = {
@@ -109,7 +111,7 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res = await send(path, init)
 
   // access expirado: troca pelo refresh e repete uma vez, sem o usuário ver.
@@ -518,14 +520,28 @@ export const numbersApi = {
 
 // --- CRM da linha: as conversas daquele número ---
 
-export const CRM_STAGES = ['novo', 'atendendo', 'qualificado', 'ganho', 'perdido'] as const
+/** O funil de atendimento: a ordem é a das etapas e das colunas do kanban. */
+export const CRM_STAGES = ['novo', 'mql', 'conversando', 'agendado', 'compareceu', 'fechado', 'perdido'] as const
 export type CrmStage = (typeof CRM_STAGES)[number]
 
 export const CRM_STAGE_LABEL: Record<CrmStage, string> = {
   novo: 'Novo',
-  atendendo: 'Atendendo',
-  qualificado: 'Qualificado',
-  ganho: 'Ganho',
+  mql: 'MQL',
+  conversando: 'Conversando',
+  agendado: 'Agendado',
+  compareceu: 'Compareceu',
+  fechado: 'Fechado',
+  perdido: 'Perdido',
+}
+
+/** Nome longo de cada etapa, como aparece no funil. */
+export const FUNNEL_LABEL: Record<CrmStage, string> = {
+  novo: 'Leads',
+  mql: 'Leads MQL',
+  conversando: 'Continuaram a conversa',
+  agendado: 'Agendamento confirmado',
+  compareceu: 'Compareceu na clínica',
+  fechado: 'Fechamento',
   perdido: 'Perdido',
 }
 
@@ -539,6 +555,10 @@ export type CrmContact = {
   name: string | null
   profile_pic_url: string | null
   stage: CrmStage
+  stage_source?: 'manual' | 'auto' | 'rule' | 'ai' | null
+  /** quando o lead alcançou cada etapa do funil */
+  milestones?: Partial<Record<Exclude<CrmStage, 'novo'>, string | null>>
+  deal_value?: number | null
   note: string | null
   origin: 'webhook' | 'sync' | 'simulado' | string
   unread_count: number
@@ -882,6 +902,8 @@ export type KeywordRule = {
   once_per_contact: boolean
   is_test: boolean
   active: boolean
+  /** etapa do funil para onde o lead avança quando a regra casa */
+  set_stage: string | null
   hits: number
   last_fired_at: string | null
   created_at: string
@@ -894,6 +916,7 @@ export type RuleCatalog = {
   match_modes: RuleOption[]
   value_modes: RuleOption[]
   directions: RuleOption[]
+  stages: { value: string; label: string }[]
 }
 
 export type SimulationResult = {
@@ -936,7 +959,7 @@ export const authApi = {
       body: JSON.stringify({ current_password, new_password }),
     }),
   users: () => request<AuthUser[]>('/api/auth/users'),
-  createUser: (payload: { username: string; password: string; name?: string; role: string }) =>
+  createUser: (payload: { username: string; password: string; name?: string; role: string; number_ids?: number[] }) =>
     request<AuthUser>('/api/auth/users', { method: 'POST', body: JSON.stringify(payload) }),
   patchUser: (id: number, patch: Record<string, unknown>) =>
     request<AuthUser>(`/api/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
@@ -1164,4 +1187,158 @@ export function stripJourneyRef(text: string | null): { text: string | null; ref
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return { text: cleaned, ref: tl ? tl[1] : protocol![0] }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  atendimento: funil, tempo de resposta e análise com IA                      */
+/* -------------------------------------------------------------------------- */
+
+export type FunnelStep = {
+  stage: CrmStage
+  label: string
+  count: number
+  from_start: number | null
+  from_previous: number | null
+  lost_here: number
+}
+
+export type FunnelData = {
+  days: number
+  total: number
+  steps: FunnelStep[]
+  revenue: number
+  current: { stage: CrmStage; label: string; count: number }[]
+  lost: number
+  closed_with_value: number
+  avg_ticket: number | null
+  by_origin: { label: string; total: number; steps: FunnelStep[]; revenue: number }[]
+  timing: { stage: CrmStage; label: string; median_days: number | null; count: number }[]
+}
+
+export type TimeSummary = {
+  count: number
+  avg_seconds: number | null
+  median_seconds: number | null
+  p90_seconds: number | null
+}
+
+export type ResponseTimes = {
+  days: number
+  responses: TimeSummary
+  first_response: TimeSummary
+  within_5min: number | null
+  unanswered: number
+  buckets: { label: string; count: number; share: number | null }[]
+  by_hour: { hour: number; count: number; median_seconds: number | null }[]
+  by_weekday: { day: string; count: number; median_seconds: number | null }[]
+  by_day: { day: string; count: number; median_seconds: number; avg_seconds: number }[]
+  waiting_now: { contact_id: number; since: string; seconds: number; name: string | null; stage: CrmStage | null }[]
+  waiting_now_count: number
+}
+
+export type AiAnalysis = {
+  id: number
+  contact_id: number
+  status: 'ok' | 'error'
+  error: string | null
+  model: string | null
+  created_at: string
+  message_count: number
+  /** chegou mensagem depois da análise */
+  stale: boolean
+  summary: string | null
+  sentiment: 'positivo' | 'neutro' | 'negativo' | null
+  temperature: 'quente' | 'morno' | 'frio' | null
+  is_mql: boolean | null
+  mql_reason: string | null
+  suggested_stage: CrmStage | null
+  suggested_stage_label: string | null
+  stage_reason: string | null
+  applied_stage: CrmStage | null
+  score: number | null
+  criteria: { key: string; label: string; score: number | null }[]
+  strengths: string[]
+  improvements: string[]
+  objections: { key: string; label: string }[]
+  objection_notes: string | null
+  next_action: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+}
+
+export type ContactAttendance = {
+  response: TimeSummary & { first_response_seconds: number | null; waiting_since: string | null }
+  analysis: AiAnalysis | null
+  stage: CrmStage
+}
+
+export type AiConfig = {
+  configured: boolean
+  key_hint: string
+  model: string
+  effort: string
+  auto_apply_stage: boolean
+  criteria: { key: string; label: string }[]
+}
+
+export type AiOverview = {
+  days: number
+  analyzed: number
+  with_errors: number
+  avg_score: number | null
+  mql_rate: number | null
+  criteria: { key: string; label: string; avg: number | null }[]
+  temperature: { value: string; count: number }[]
+  sentiment: { value: string; count: number }[]
+  objections: { key: string; label: string; count: number }[]
+  top_improvements: { text: string; count: number }[]
+  items: (AiAnalysis & { name: string | null; stage: CrmStage | null })[]
+}
+
+export type BatchStatus = {
+  running: boolean
+  total: number
+  done: number
+  errors: number
+  last_error?: string | null
+  started_at?: string
+  finished_at?: string | null
+}
+
+export const attendanceApi = {
+  funnel: (numberId?: number, days = 30) =>
+    request<FunnelData>(`/api/attendance/funnel${qs({ number_id: numberId, days })}`),
+  responseTimes: (numberId?: number, days = 30) =>
+    request<ResponseTimes>(`/api/attendance/response-times${qs({ number_id: numberId, days })}`),
+  contact: (contactId: number) => request<ContactAttendance>(`/api/attendance/contact/${contactId}`),
+  analyze: (contactId: number) =>
+    request<{ analysis: AiAnalysis; stage: CrmStage }>(`/api/attendance/contact/${contactId}/analyze`, {
+      method: 'POST',
+    }),
+  applyStage: (contactId: number, stage: CrmStage) =>
+    request<{ stage: CrmStage }>(`/api/attendance/contact/${contactId}/apply-stage`, {
+      method: 'POST',
+      body: JSON.stringify({ stage }),
+    }),
+  aiConfig: () => request<AiConfig>('/api/attendance/ai-config'),
+  saveAiConfig: (patch: { anthropic_api_key?: string; auto_apply_stage?: boolean }) =>
+    request<AiConfig>('/api/attendance/ai-config', { method: 'PUT', body: JSON.stringify(patch) }),
+  aiOverview: (numberId?: number, days = 30) =>
+    request<AiOverview>(`/api/attendance/ai-overview${qs({ number_id: numberId, days })}`),
+  batch: (numberId: number | undefined, limit: number) =>
+    request<BatchStatus>('/api/attendance/analyze-batch', {
+      method: 'POST',
+      body: JSON.stringify({ number_id: numberId ?? null, limit, only_stale: true }),
+    }),
+  batchStatus: (numberId?: number) =>
+    request<BatchStatus>(`/api/attendance/analyze-batch${qs({ number_id: numberId })}`),
+}
+
+/** "4 min", "1,5 h", "2 d" — duração legível a partir de segundos. */
+export function duration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`
+  if (seconds < 86400) return `${(seconds / 3600).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} h`
+  return `${(seconds / 86400).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} d`
 }

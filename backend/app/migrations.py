@@ -44,7 +44,19 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "match_method": "VARCHAR(16)",
         "match_score": "FLOAT",
         "whatsapp_arrived_at": "TIMESTAMP",
+        # funil de atendimento: quando o lead alcancou cada etapa
+        "mql_at": "TIMESTAMP",
+        "conversation_at": "TIMESTAMP",
+        "scheduled_at": "TIMESTAMP",
+        "attended_at": "TIMESTAMP",
+        "closed_at": "TIMESTAMP",
+        "lost_at": "TIMESTAMP",
+        "deal_value": "FLOAT",
+        "stage_source": "VARCHAR(8)",
+        "first_response_at": "TIMESTAMP",
+        "customer_replied_at": "TIMESTAMP",
     },
+    "keyword_rules": {"set_stage": "VARCHAR(16)"},
     # ponteiro da mensagem pro POST de webhook que a trouxe (ver o payload cru)
     "messages": {"webhook_log_id": "INTEGER"},
     "prospects": {"wa_number_id": "INTEGER"},
@@ -141,8 +153,33 @@ def _contact_journey_index(conn) -> None:
         conn.execute(text("CREATE INDEX ix_contacts_transaction_id ON contacts (transaction_id)"))
 
 
+# etapas do CRM antigo -> funil de atendimento. `atendendo` era so "o atendente
+# respondeu": nao diz nada sobre qualificacao, entao volta a `novo` e o sinal
+# fica em `first_response_at` (preenchido pelo backfill do app.funnel).
+_STAGE_RENAMES = (("atendendo", "novo"), ("qualificado", "mql"), ("ganho", "fechado"))
+
+
+def _rename_stages(conn) -> None:
+    if "contacts" not in set(inspect(conn).get_table_names()):
+        return
+    for old, new in _STAGE_RENAMES:
+        result = conn.execute(text("UPDATE contacts SET stage = :new WHERE stage = :old"), {"new": new, "old": old})
+        if result.rowcount:
+            log.info("migracao: %s conversa(s) de %s para %s", result.rowcount, old, new)
+    # quem ja estava numa etapa ganha o marco dela (o funil conta por marco)
+    for stage, column in (("mql", "mql_at"), ("fechado", "closed_at"), ("perdido", "lost_at")):
+        conn.execute(
+            text(
+                f"UPDATE contacts SET {column} = COALESCE(stage_changed_at, created_at) "
+                f"WHERE stage = :stage AND {column} IS NULL"
+            ),
+            {"stage": stage},
+        )
+
+
 def upgrade(conn) -> None:
     _add_missing_columns(conn)
+    _rename_stages(conn)
     _contact_journey_index(conn)
     _relax_unique_indexes(conn)
     _backfill(conn)

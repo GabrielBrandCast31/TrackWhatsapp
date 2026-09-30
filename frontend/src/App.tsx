@@ -6,6 +6,8 @@ import { AuthProvider, useAuth } from './authContext'
 import {
   IconBoard,
   IconCode,
+  IconForm,
+  IconFunnel,
   IconMenu,
   IconPlug,
   IconRadar,
@@ -21,8 +23,10 @@ import Login from './Login'
 import { NumberProvider, useNumber } from './numberContext'
 import Sidebar from './Sidebar'
 import Admin from './tabs/Admin'
+import Atendimento from './tabs/Atendimento'
 import Attribution from './tabs/Attribution'
 import Conversions from './tabs/Conversions'
+import Forms from './tabs/Forms'
 import CrmNumber from './tabs/CrmNumber'
 import Instances from './tabs/Instances'
 import Journeys from './tabs/Journeys'
@@ -32,6 +36,8 @@ import Tracking from './tabs/Tracking'
 
 const TABS = [
   { id: 'journeys', label: 'Jornadas', hint: 'Anúncio → site → WhatsApp → lead', Icon: IconRoute },
+  { id: 'atendimento', label: 'Atendimento', hint: 'Funil, tempo de resposta e IA', Icon: IconFunnel },
+  { id: 'forms', label: 'Formulários', hint: 'Captação com link próprio', Icon: IconForm },
   { id: 'sitetag', label: 'Tag do site', hint: 'TL_ID, eventos e simulador', Icon: IconCode },
   { id: 'crm', label: 'CRM', hint: 'Conversas com a origem', Icon: IconBoard },
   { id: 'instances', label: 'Conexão', hint: 'Evolution API', Icon: IconPlug },
@@ -222,6 +228,8 @@ function Shell() {
 
             {tab === 'journeys' && <Journeys />}
             {tab === 'sitetag' && <SiteTag />}
+            {tab === 'forms' && <Forms />}
+            {tab === 'atendimento' && <Atendimento />}
             {tab === 'instances' && <Instances onChanged={refresh} />}
             {tab === 'tracking' && <Tracking onChanged={refresh} />}
             {tab === 'attribution' && <Attribution />}

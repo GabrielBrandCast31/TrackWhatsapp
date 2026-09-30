@@ -1,15 +1,51 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import { authApi, type AuthUser } from '../api'
+import { authApi, evolutionApi, type AuthUser, type EvoInstance } from '../api'
 import { useAuth } from '../authContext'
 import { Badge, Banner, Button, Card, Empty, Field, Input, Select, TrashButton, when } from '../ui'
 
 const ROLE_LABEL: Record<string, string> = {
-  admin: 'Administrador — vê tudo, inclusive prospecção, Cloud API e este cadastro',
-  user: 'Operação — conexão, rastreamento, CRM da linha, leads e conversões',
+  admin: 'Administrador — vê todas as linhas, inclusive prospecção, Cloud API e este cadastro',
+  user: 'Operação — só as linhas (clientes) marcadas abaixo: CRM, jornadas, atendimento e formulários',
 }
 
-const BLANK = { username: '', name: '', password: '', role: 'user' }
+const BLANK = { username: '', name: '', password: '', role: 'user', number_ids: [] as number[] }
+
+/** Linhas que o usuário enxerga. Admin vê todas — o seletor some pra ele. */
+function LinePicker({
+  lines,
+  value,
+  onChange,
+  disabled,
+}: {
+  lines: EvoInstance[]
+  value: number[]
+  onChange: (ids: number[]) => void
+  disabled?: boolean
+}) {
+  if (lines.length === 0) return <p className="text-[11px] text-ink-500">Nenhuma linha cadastrada ainda.</p>
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {lines.map((l) => {
+        const on = value.includes(l.id)
+        return (
+          <button
+            key={l.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(on ? value.filter((v) => v !== l.id) : [...value, l.id])}
+            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50 ${
+              on ? 'border-wa-500 bg-wa-900/60 text-wa-500' : 'border-ink-700 text-ink-400 hover:border-ink-500 hover:text-ink-100'
+            }`}
+          >
+            {on ? '✓ ' : ''}
+            {l.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 /** Cadastro de quem entra no painel. Só admin chega aqui (o backend confere de novo). */
 export default function Users() {
@@ -21,6 +57,11 @@ export default function Users() {
   const [msg, setMsg] = useState<string | null>(null)
   const [resetting, setResetting] = useState<number | null>(null)
   const [newPassword, setNewPassword] = useState('')
+  const [lines, setLines] = useState<EvoInstance[]>([])
+
+  useEffect(() => {
+    evolutionApi.list().then(setLines).catch(() => setLines([]))
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -57,8 +98,9 @@ export default function Users() {
         password: form.password,
         name: form.name.trim() || undefined,
         role: form.role,
+        number_ids: form.role === 'admin' ? [] : form.number_ids,
       })
-      setForm({ ...BLANK })
+      setForm({ ...BLANK, number_ids: [] })
     }, 'Usuário criado.')
 
   const saveReset = (id: number) =>
@@ -135,6 +177,20 @@ export default function Users() {
                   </div>
                 </div>
 
+                {u.role !== 'admin' && (
+                  <div className="mt-2.5">
+                    <p className="mb-1 text-[10.5px] uppercase tracking-wide text-ink-500">
+                      Linhas que vê {(u.number_ids ?? []).length === 0 && <span className="text-amber-300">— nenhuma ainda</span>}
+                    </p>
+                    <LinePicker
+                      lines={lines}
+                      value={u.number_ids ?? []}
+                      disabled={busy}
+                      onChange={(ids) => void run(() => authApi.patchUser(u.id, { number_ids: ids }), 'Linhas atualizadas.')}
+                    />
+                  </div>
+                )}
+
                 {resetting === u.id && (
                   <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-ink-800 bg-ink-850 p-3">
                     <div className="min-w-56 flex-1">
@@ -197,6 +253,11 @@ export default function Users() {
               <option value="admin">admin</option>
             </Select>
           </Field>
+          {form.role !== 'admin' && (
+            <Field label="Linhas (clientes) que ele vê" hint="Ele só enxerga as conversas, jornadas e formulários dessas linhas.">
+              <LinePicker lines={lines} value={form.number_ids} onChange={(ids) => setForm({ ...form, number_ids: ids })} />
+            </Field>
+          )}
           <Button
             type="submit"
             variant="primary"

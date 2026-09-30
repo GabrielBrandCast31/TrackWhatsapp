@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app import numbers as numbers_service
 from app import settings_store
+from app import access
 from app.db import get_session
 from app.firing import fire_event
 from app.models import Contact, Conversion, WaNumber
@@ -87,9 +88,9 @@ async def list_conversions(
         .order_by(desc(Conversion.id))
         .limit(limit)
     )
-    if number_id is not None:
-        stmt = stmt.join(Contact, Contact.id == Conversion.contact_id).where(
-            Contact.wa_number_id == number_id
+    if number_id is not None or access.is_restricted():
+        stmt = access.scope(
+            stmt.join(Contact, Contact.id == Conversion.contact_id), Contact.wa_number_id, number_id
         )
     rows = (await session.execute(stmt)).scalars().all()
     return [serialize_conversion(c, c.contact) for c in rows]
@@ -98,8 +99,7 @@ async def list_conversions(
 @router.post("/conversions")
 async def create_conversion(payload: ConversionIn, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, payload.contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Contato nao encontrado.")
+    access.ensure_contact(contact)
 
     cfg = await _cfg_for_contact(session, contact)
     invalid = [d for d in payload.destinations if d not in ALL_DESTINATIONS]
@@ -151,8 +151,7 @@ async def retry_conversion(
         raise HTTPException(status_code=404, detail="Conversao nao encontrada.")
 
     contact = await session.get(Contact, conv.contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Contato da conversao nao existe mais.")
+    access.ensure_contact(contact)
 
     cfg = await _cfg_for_contact(session, contact)
     targets = destinations or [d.destination for d in conv.dispatches if d.status == "error"] or None
@@ -170,8 +169,7 @@ async def retry_conversion(
 async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depends(get_session)):
     """Monta os payloads sem enviar nada — pra conferir o que sairia."""
     contact = await session.get(Contact, payload.contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Contato nao encontrado.")
+    access.ensure_contact(contact)
 
     cfg = await _cfg_for_contact(session, contact)
     from datetime import datetime, timezone

@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import campaigns, journey
+from app import campaigns, funnel, journey
 from app import numbers as numbers_service
 from app import settings_store
 from app.firing import already_fired, fire_event
@@ -322,6 +322,22 @@ async def _apply_rules(
     for hit in rules_engine.first_firing(rules, text, direction):
         rule: KeywordRule = hit["rule"]
 
+        # mover etapa nao depende de atribuicao: vale pra todo lead da linha
+        moved = bool(rule.set_stage) and funnel.advance(contact, rule.set_stage, "rule")
+        if rule.event_name == rules_engine.NO_EVENT:
+            rule.hits = (rule.hits or 0) + 1
+            rule.last_fired_at = datetime.now(timezone.utc)
+            fired.append(
+                {
+                    "rule_id": rule.id,
+                    "event": None,
+                    "status": "stage" if moved else "skipped",
+                    "stage": rule.set_stage,
+                    "reason": None if moved else "lead já estava nessa etapa ou além",
+                }
+            )
+            continue
+
         if rule.require_attribution and not contact.ctwa_clid:
             fired.append(
                 {
@@ -491,13 +507,12 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
             if from_me:
                 contact.unread_count = 0
-                if contact.stage == "novo":
-                    # o atendente respondeu: o card sai de "novo" sozinho. Etapa
-                    # movida a mao nunca e rebaixada por isso.
-                    contact.stage = "atendendo"
-                    contact.stage_changed_at = datetime.now(timezone.utc)
+                # primeira resposta do atendente: base do "continuou a conversa"
+                funnel.on_attendant_message(contact, stamp)
             else:
                 contact.unread_count = (contact.unread_count or 0) + 1
+                # o cliente voltou a falar depois da resposta: continuou a conversa
+                funnel.on_customer_message(contact, stamp)
 
             # primeiro contato atribuido: manda o evento leve na hora, se ligado
             if created and not from_me and contact.ctwa_clid and cfg.get("auto_fire_on_first_message"):
@@ -520,11 +535,14 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
     result["contact_ids"] = sorted(set(result["contact_ids"]))
     fired = [r for r in result["rules"] if r["status"] == "fired"]
+    staged = [r for r in result["rules"] if r["status"] == "stage"]
     parts = [f"[{event or 'sem evento'}]"]
     if result["messages"]:
         parts.append(f"{result['messages']} msg(s), {result['new_contacts']} lead(s) novo(s)")
     if fired:
         parts.append(f"{len(fired)} evento(s) disparado(s) por regra")
+    if staged:
+        parts.append(f"{len(staged)} lead(s) avançado(s) no funil por regra")
     if result.get("journeys"):
         parts.append(f"{len(result['journeys'])} lead(s) ligado(s) à jornada do site")
     if result["ignored"]:

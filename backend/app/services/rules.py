@@ -24,7 +24,11 @@ EVENT_CATALOG = (
     {"name": "Purchase", "label": "Purchase — Venda fechada", "accepts_value": True},
     # resolvido no disparo pelo objetivo da campanha do lead (app.campaigns)
     {"name": "__objective__", "label": "Pelo objetivo da campanha (automático)", "accepts_value": True},
+    # regra que so move o lead no funil (ex.: "agendamento confirmado"), sem evento
+    {"name": "__none__", "label": "Nenhum — só mover a etapa do funil", "accepts_value": False},
 )
+
+NO_EVENT = "__none__"
 
 MATCH_MODES = ("broad", "exact")
 DIRECTIONS = ("attendant", "customer", "any")

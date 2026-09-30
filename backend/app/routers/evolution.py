@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import access, journey
 from app import numbers as numbers_service
 from app import phones, settings_store
 from app.db import get_session
@@ -188,7 +189,7 @@ async def _counts(session: AsyncSession, number_id: int) -> dict:
 
 async def _require(session: AsyncSession, number_id: int) -> WaNumber:
     number = await session.get(WaNumber, number_id)
-    if number is None or number.channel != "evolution":
+    if number is None or number.channel != "evolution" or not access.can_see(number.id):
         raise HTTPException(status_code=404, detail="Instância não encontrada.")
     return number
 
@@ -200,6 +201,8 @@ async def _cfg(session: AsyncSession, number: WaNumber) -> dict:
 @router.get("/instances")
 async def list_instances(session: AsyncSession = Depends(get_session)):
     rows = await numbers_service.list_numbers(session, channel="evolution")
+    # cada usuario ve so as linhas (clientes) dele; admin ve todas
+    rows = [n for n in rows if access.can_see(n.id)]
     global_cfg = await settings_store.load(session)
     return [
         serialize(n, await _counts(session, n.id), numbers_service.effective_cfg(global_cfg, n))
@@ -240,17 +243,16 @@ async def available_instances(
     if api_key:
         cfg["evo_api_key"] = api_key.strip()
 
-    taken = {
-        n.evo_instance
-        for n in await numbers_service.list_numbers(session, channel="evolution")
-        if n.evo_instance
-    }
+    lines = await numbers_service.list_numbers(session, channel="evolution")
+    taken = {n.evo_instance for n in lines if n.evo_instance}
+    # instancia cadastrada por outro usuario nem aparece pra quem nao e dono dela
+    hidden = {n.evo_instance for n in lines if n.evo_instance and not access.can_see(n.id)}
     try:
         rows = await evolution.list_instances(cfg)
     except evolution.EvolutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # `registered` deixa a tela separar o que ja tem linha do que esta livre
-    return [{**row, "registered": row["name"] in taken} for row in rows]
+    return [{**row, "registered": row["name"] in taken} for row in rows if row["name"] not in hidden]
 
 
 @router.post("/instances")
@@ -269,6 +271,7 @@ async def create_instance(payload: InstanceIn, session: AsyncSession = Depends(g
         evo_base_url=(payload.base_url or global_cfg.get("evo_base_url") or "").strip() or None,
         evo_api_key=(payload.api_key or global_cfg.get("evo_api_key") or "").strip() or None,
         webhook_token=secrets.token_urlsafe(18),
+        site_key=journey.new_site_key(),
         active=payload.active,
         note=payload.note,
         overrides={},
@@ -287,6 +290,10 @@ async def create_instance(payload: InstanceIn, session: AsyncSession = Depends(g
     # linha esta selecionada na tela.
     if payload.is_default or first_line:
         await numbers_service.set_default(session, number)
+    # quem cadastra a linha fica dono dela (admin ja ve todas)
+    user = access.current_user()
+    if user is not None and user.role != "admin":
+        await access.grant(session, user.id, number.id)
     await session.commit()
     await session.refresh(number)
     return serialize(number, await _counts(session, number.id), await _cfg(session, number))

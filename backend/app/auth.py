@@ -175,7 +175,12 @@ async def require_user(
     claims = decode_token(token)
     if claims is None:
         raise _unauthorized("Sessão expirada. Faça login de novo.")
-    return await load_user(session, claims)
+    user = await load_user(session, claims)
+    # linhas que esse usuario pode ver — toda rota filtra por aqui (app.access)
+    from app import access
+
+    await access.load(session, user)
+    return user
 
 
 async def require_admin(user: User = Depends(require_user)) -> User:

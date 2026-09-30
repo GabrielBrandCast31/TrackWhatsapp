@@ -37,6 +37,7 @@ from app import numbers as numbers_service
 from app import state_watch
 from app.db import SessionLocal, init_db
 from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect, TrackingEvent
+from app.routers import attendance as attendance_router
 from app.routers import auth as auth_router
 from app.routers import collect as collect_router
 from app.routers import config as config_router
@@ -44,6 +45,7 @@ from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
 from app.routers import crm as crm_router
 from app.routers import evolution as evolution_router
+from app.routers import forms as forms_router
 from app.routers import journeys as journeys_router
 from app.routers import numbers as numbers_router
 from app.routers import prospecting as prospecting_router
@@ -72,7 +74,11 @@ _admin_only = [Depends(auth.require_admin)]
 app.include_router(auth_router.router)
 
 # --- rastreamento: o que a tela principal usa, pra qualquer usuario logado ---
+# formulario publico (/f/{slug} consome estas) ANTES do painel de formularios
+app.include_router(forms_router.public_router)
 app.include_router(journeys_router.router, dependencies=_logged_in)
+app.include_router(forms_router.router, dependencies=_logged_in)
+app.include_router(attendance_router.router, dependencies=_logged_in)
 app.include_router(evolution_router.router, dependencies=_logged_in)
 app.include_router(rules_router.router, dependencies=_logged_in)
 app.include_router(crm_router.router, dependencies=_logged_in)
@@ -100,6 +106,11 @@ async def on_startup() -> None:
     async with SessionLocal() as session:
         # primeira subida em multi-numero: a config antiga vira o numero #1
         await numbers_service.seed_from_global_settings(session)
+    async with SessionLocal() as session:
+        # funil de atendimento: sinais de conversa da base que ja existia
+        from app import funnel
+
+        await funnel.backfill(session)
     # fila de abordagem que sobrou de um restart volta a andar sozinha
     async with SessionLocal() as session:
         pending = (
@@ -134,8 +145,10 @@ async def health():
 async def stats(number_id: int | None = Query(default=None)):
     """Numeros do topo da tela. Com `number_id`, so daquela linha."""
 
+    from app import access
+
     def scoped(stmt, model):
-        return stmt if number_id is None else stmt.where(model.wa_number_id == number_id)
+        return access.scope(stmt, model.wa_number_id, number_id)
 
     async with SessionLocal() as session:
         total_contacts = (
@@ -157,14 +170,13 @@ async def stats(number_id: int | None = Query(default=None)):
 
         conv_stmt = select(func.count(Conversion.id))
         dispatch_stmt = select(Dispatch.status, func.count()).group_by(Dispatch.status)
-        if number_id is not None:
-            conv_stmt = conv_stmt.join(Contact, Contact.id == Conversion.contact_id).where(
-                Contact.wa_number_id == number_id
-            )
-            dispatch_stmt = (
-                dispatch_stmt.join(Conversion, Conversion.id == Dispatch.conversion_id)
-                .join(Contact, Contact.id == Conversion.contact_id)
-                .where(Contact.wa_number_id == number_id)
+        if number_id is not None or access.is_restricted():
+            conv_stmt = scoped(conv_stmt.join(Contact, Contact.id == Conversion.contact_id), Contact)
+            dispatch_stmt = scoped(
+                dispatch_stmt.join(Conversion, Conversion.id == Dispatch.conversion_id).join(
+                    Contact, Contact.id == Conversion.contact_id
+                ),
+                Contact,
             )
         total_conversions = (await session.execute(conv_stmt)).scalar_one()
         by_status = dict((await session.execute(dispatch_stmt)).all())
@@ -182,7 +194,9 @@ async def stats(number_id: int | None = Query(default=None)):
                 scoped(select(func.count(Prospect.id)).where(Prospect.replied_at.is_not(None)), Prospect)
             )
         ).scalar_one()
-        numbers_count = len(await numbers_service.list_numbers(session, channel="evolution"))
+        numbers_count = len(
+            [n for n in await numbers_service.list_numbers(session, channel="evolution") if access.can_see(n.id)]
+        )
         rules_count = (await session.execute(select(func.count(KeywordRule.id)))).scalar_one()
         journeys = (
             await session.execute(

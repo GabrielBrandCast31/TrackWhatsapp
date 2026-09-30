@@ -17,6 +17,8 @@ import {
   type RuleCatalog,
   stripJourneyRef,
 } from '../api'
+import { ContactAttendanceCard } from '../AttendanceParts'
+import { ContactFormAnswers } from '../forms/ContactFormAnswers'
 import { ContactJourney } from '../JourneyView'
 import { ChannelIcon, ObjectiveChip, SourceDetails, SourceTag } from '../LeadSource'
 import { MessagePayloadToggle } from '../MessagePayload'
@@ -47,9 +49,11 @@ const VIEWS: { id: View; label: string }[] = [
 
 const STAGE_TONE: Record<CrmStage, 'neutral' | 'info' | 'warn' | 'good' | 'bad'> = {
   novo: 'neutral',
-  atendendo: 'info',
-  qualificado: 'warn',
-  ganho: 'good',
+  mql: 'info',
+  conversando: 'info',
+  agendado: 'warn',
+  compareceu: 'warn',
+  fechado: 'good',
   perdido: 'bad',
 }
 
@@ -247,6 +251,7 @@ function Avatar({ c, size = 36 }: { c: CrmContact; size?: number }) {
 
 function OriginBadge({ origin }: { origin: string }) {
   if (origin === 'simulado') return <Badge tone="warn">simulado</Badge>
+  if (origin === 'form') return <Badge tone="info">formulário</Badge>
   return null
 }
 
@@ -340,9 +345,17 @@ function StagePills({ detail, onChanged }: { detail: CrmContact; onChanged: () =
           disabled={busy}
           onClick={async () => {
             if (s === detail.stage) return
+            // fechamento pede o valor: é a receita do funil
+            let deal_value: number | undefined
+            if (s === 'fechado') {
+              const raw = window.prompt('Valor do fechamento (R$) — deixe em branco se não souber', '')
+              if (raw === null) return
+              const n = Number(raw.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.'))
+              if (raw.trim() && Number.isFinite(n)) deal_value = n
+            }
             setBusy(true)
             try {
-              await crmApi.patch(detail.id, { stage: s })
+              await crmApi.patch(detail.id, { stage: s, deal_value })
               await onChanged()
             } finally {
               setBusy(false)
@@ -818,6 +831,13 @@ function ContactInfo({
       <Section title="Etapa">
         <StagePills detail={detail} onChanged={refresh} />
       </Section>
+      <ContactFormAnswers contactId={detail.id} render={(body) => <Section title="Formulário respondido">{body}</Section>} />
+      <Section
+        title="Atendimento e IA"
+        info="Tempo de resposta desta conversa e a análise do Claude: nota do atendimento, MQL, etapa sugerida, objeções e próxima ação."
+      >
+        <ContactAttendanceCard contactId={detail.id} onChanged={() => void refresh()} />
+      </Section>
       <Section
         title="Jornada no site"
         info="A navegação do visitante antes de chamar no WhatsApp, ligada pelo TL_ID que a tag anexou ao clique."
@@ -859,7 +879,7 @@ const CHIPS: { id: Chip; label: string }[] = [
   { id: 'all', label: 'Tudo' },
   { id: 'unread', label: 'Não lidas' },
   { id: 'ads', label: 'Anúncios' },
-  { id: 'won', label: 'Ganhos' },
+  { id: 'won', label: 'Fechados' },
 ]
 
 function ConversationItem({ c, active, onOpen }: { c: CrmContact; active: boolean; onOpen: () => void }) {
@@ -1055,7 +1075,7 @@ function Conversas({
   const shown = rows.filter((c) => {
     if (chip === 'unread') return c.unread_count > 0
     if (chip === 'ads') return c.source.channel === 'meta_ads' || c.source.channel === 'google_ads'
-    if (chip === 'won') return c.stage === 'ganho'
+    if (chip === 'won') return c.stage === 'fechado'
     return true
   })
 
@@ -1497,7 +1517,7 @@ function CampaignStrip({
                 g.channel_label,
                 g.campaign_name && `Campanha: ${g.campaign_name}`,
                 g.objective_label && `Objetivo: ${g.objective_label} → ${g.suggested_event}`,
-                `${g.contacts} lead(s), ${g.with_conversion} com conversão, ${g.won} ganho(s)`,
+                `${g.contacts} lead(s), ${g.with_conversion} com conversão, ${g.won} fechado(s)`,
               ]
                 .filter(Boolean)
                 .join('\n')}
@@ -1516,7 +1536,7 @@ function CampaignStrip({
               <span className="flex items-baseline gap-2 text-[11px] text-ink-500">
                 <strong className="text-sm text-ink-100">{g.contacts}</strong> lead(s)
                 {g.with_conversion > 0 && <span className="text-wa-500">{g.with_conversion} conv.</span>}
-                {g.won > 0 && <span className="text-sky-300">{g.won} ganho(s)</span>}
+                {g.won > 0 && <span className="text-sky-300">{g.won} fechado(s)</span>}
               </span>
             </button>
           )

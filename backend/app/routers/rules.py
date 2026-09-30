@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import access, funnel
 from app.db import get_session
 from app.models import KeywordRule, WaNumber
 from app.services import rules as engine
@@ -32,6 +33,7 @@ def serialize(rule: KeywordRule) -> dict:
         "once_per_contact": rule.once_per_contact,
         "is_test": rule.is_test,
         "active": rule.active,
+        "set_stage": rule.set_stage,
         "hits": rule.hits,
         "last_fired_at": rule.last_fired_at,
         "created_at": rule.created_at,
@@ -51,6 +53,7 @@ class RuleIn(BaseModel):
     once_per_contact: bool = True
     is_test: bool = False
     active: bool = True
+    set_stage: str | None = None
 
 
 class RulePatch(BaseModel):
@@ -66,9 +69,16 @@ class RulePatch(BaseModel):
     is_test: bool | None = None
     active: bool | None = None
     wa_number_id: int | None = None
+    set_stage: str | None = None
 
 
 def _validate(data: RuleIn | RulePatch) -> None:
+    if data.set_stage == "":
+        data.set_stage = None
+    if data.set_stage is not None and data.set_stage not in funnel.ORDER[1:]:
+        raise HTTPException(status_code=400, detail=f"Etapa inválida: {data.set_stage}")
+    if isinstance(data, RuleIn) and data.event_name == engine.NO_EVENT and not data.set_stage:
+        raise HTTPException(status_code=400, detail="Regra sem evento precisa mover o lead para alguma etapa.")
     if data.match_mode is not None and data.match_mode not in engine.MATCH_MODES:
         raise HTTPException(status_code=400, detail=f"match_mode inválido: {data.match_mode}")
     if data.direction is not None and data.direction not in engine.DIRECTIONS:
@@ -79,9 +89,22 @@ def _validate(data: RuleIn | RulePatch) -> None:
 
 async def _check_number(session: AsyncSession, number_id: int | None) -> None:
     if number_id is None:
+        # regra global vale pra linha de todo mundo: so admin mexe nela
+        if access.is_restricted():
+            raise HTTPException(status_code=403, detail="Regra para todas as linhas é só para administradores.")
         return
+    access.ensure_number(number_id)
     if await session.get(WaNumber, number_id) is None:
         raise HTTPException(status_code=404, detail="Linha não encontrada.")
+
+
+async def _rule_for_edit(session: AsyncSession, rule_id: int) -> KeywordRule:
+    rule = await session.get(KeywordRule, rule_id)
+    if rule is None or (rule.wa_number_id is not None and not access.can_see(rule.wa_number_id)):
+        raise HTTPException(status_code=404, detail="Regra não encontrada.")
+    if rule.wa_number_id is None and access.is_restricted():
+        raise HTTPException(status_code=403, detail="Regra para todas as linhas é só para administradores.")
+    return rule
 
 
 @router.get("/catalog")
@@ -89,6 +112,7 @@ async def catalog():
     """Eventos, modos e textos de ajuda que a tela usa — um lugar so define isso."""
     return {
         "events": list(engine.EVENT_CATALOG),
+        "stages": [{"value": s, "label": funnel.LABELS[s]} for s in funnel.ORDER[1:]],
         "match_modes": [
             {
                 "value": "broad",
@@ -129,6 +153,11 @@ async def list_rules(
 ):
     stmt = select(KeywordRule).order_by(KeywordRule.id)
     if number_id is not None:
+        access.ensure_number(number_id)
+    elif access.is_restricted():
+        ids = access.allowed() or frozenset()
+        stmt = stmt.where(KeywordRule.wa_number_id.is_(None) | KeywordRule.wa_number_id.in_(ids))
+    if number_id is not None:
         stmt = (
             stmt.where(KeywordRule.wa_number_id.is_(None) | (KeywordRule.wa_number_id == number_id))
             if include_global
@@ -151,9 +180,7 @@ async def create_rule(payload: RuleIn, session: AsyncSession = Depends(get_sessi
 
 @router.patch("/{rule_id}")
 async def patch_rule(rule_id: int, payload: RulePatch, session: AsyncSession = Depends(get_session)):
-    rule = await session.get(KeywordRule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Regra não encontrada.")
+    rule = await _rule_for_edit(session, rule_id)
     _validate(payload)
 
     patch = payload.model_dump(exclude_unset=True)
@@ -169,9 +196,7 @@ async def patch_rule(rule_id: int, payload: RulePatch, session: AsyncSession = D
 
 @router.delete("/{rule_id}", status_code=204)
 async def delete_rule(rule_id: int, session: AsyncSession = Depends(get_session)):
-    rule = await session.get(KeywordRule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Regra não encontrada.")
+    rule = await _rule_for_edit(session, rule_id)
     await session.delete(rule)
     await session.commit()
 

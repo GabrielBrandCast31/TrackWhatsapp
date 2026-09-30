@@ -24,6 +24,7 @@ SECRET_FIELDS = {
     "google_developer_token",
     "webhook_secret",
     "apify_token",
+    "anthropic_api_key",
 }
 
 DEFAULTS: dict = {
@@ -83,6 +84,10 @@ DEFAULTS: dict = {
     "outreach_throttle_seconds": int(os.getenv("OUTREACH_THROTTLE_SECONDS", "8")),
     "outreach_daily_cap": int(os.getenv("OUTREACH_DAILY_CAP", "80")),
     "outreach_only_mobile": True,
+    # --- Analise de atendimento com IA (Claude) ---
+    "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY", ""),
+    # a etapa sugerida pela IA move o lead sozinha (so avanca; nunca marca perdido)
+    "ai_auto_apply_stage": True,
     # --- Comportamento ---
     "default_event_name": "Lead",
     "default_currency": "BRL",

@@ -149,6 +149,23 @@ class Contact(Base):
     # deles em uma consulta so — juntar `messages` a cada linha da tela nao escala.
     stage: Mapped[str] = mapped_column(String(16), default="novo", index=True)
     stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # --- funil de atendimento (app.funnel) ---
+    # Quando o lead ALCANCOU cada etapa. O funil conta por aqui, nao pela etapa
+    # atual: quem ja fechou tambem passou por MQL, conversa, agendamento e
+    # comparecimento — e quem foi perdido continua contando ate onde chegou.
+    mql_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    conversation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lost_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deal_value: Mapped[float | None] = mapped_column(Float, nullable=True)   # valor do fechamento
+    # quem mexeu por ultimo na etapa: manual | auto | rule | ai
+    stage_source: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # sinais crus do atendimento: primeira resposta do atendente e o cliente
+    # voltando a falar depois dela ("continuou a conversa")
+    first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    customer_replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     # webhook = falou com a gente depois de conectar; sync = veio do historico da
     # instancia; simulado = criado pelo simulador da tela.
@@ -259,8 +276,9 @@ class TrackingEvent(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
-# Etapas do CRM de conversa. A ordem aqui e a ordem das colunas do kanban.
-CONTACT_STAGES = ("novo", "atendendo", "qualificado", "ganho", "perdido")
+# Etapas do CRM de conversa = o funil de atendimento. A ordem aqui e a ordem das
+# colunas do kanban e das etapas do funil (veja app.funnel).
+CONTACT_STAGES = ("novo", "mql", "conversando", "agendado", "compareceu", "fechado", "perdido")
 
 
 class Message(Base):
@@ -417,6 +435,9 @@ class KeywordRule(Base):
     once_per_contact: Mapped[bool] = mapped_column(Boolean, default=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # etapa do funil para onde o lead avanca quando a regra casa ("Seu horario
+    # esta confirmado" -> agendado). Nunca rebaixa. Nulo = nao mexe na etapa.
+    set_stage: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     hits: Mapped[int] = mapped_column(Integer, default=0)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -558,6 +579,108 @@ class Outreach(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     prospect: Mapped["Prospect"] = relationship(back_populates="outreaches")
+
+
+class LeadForm(Base):
+    """Formulario de captacao (estilo Typeform), publicado em /f/{slug}.
+
+    Pertence a uma linha (o "cliente"): cada resposta vira conversa no CRM dessa
+    linha, com a jornada do site ligada pelo TL_ID quando a tag esta na pagina.
+    """
+
+    __tablename__ = "lead_forms"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))                    # nome interno
+    headline: Mapped[str] = mapped_column(Text, default="")            # o que o lead ve
+    description: Mapped[str] = mapped_column(Text, default="")
+    fields: Mapped[list] = mapped_column(JSON, default=list)
+    theme: Mapped[dict] = mapped_column(JSON, default=dict)
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    thank_you: Mapped[str] = mapped_column(Text, default="")
+    whatsapp_notify: Mapped[str] = mapped_column(String(40), default="")   # avisa a equipe
+    create_lead: Mapped[bool] = mapped_column(Boolean, default=True)       # vira conversa no CRM
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    pixel_id: Mapped[str] = mapped_column(String(32), default="")
+    capi_token: Mapped[str] = mapped_column(Text, default="")              # segredo: nunca sai no publico
+    logo_url: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FormResponse(Base):
+    __tablename__ = "form_responses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("lead_forms.id", ondelete="CASCADE"), index=True)
+    answers: Mapped[dict] = mapped_column(JSON, default=dict)
+    contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    transaction_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class UserNumber(Base):
+    """Quais linhas (clientes) um usuario de operacao enxerga. Admin ve todas."""
+
+    __tablename__ = "user_numbers"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    wa_number_id: Mapped[int] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ConversationAnalysis(Base):
+    """Avaliacao de uma conversa feita pela IA (Claude).
+
+    Uma linha por analise: guarda a foto da conversa naquele momento
+    (`last_message_id`), entao da pra saber se ela ja esta velha — chegou
+    mensagem depois — sem reanalisar tudo a cada tela aberta.
+    """
+
+    __tablename__ = "conversation_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="ok")   # ok | error
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sentiment: Mapped[str | None] = mapped_column(String(16), nullable=True)      # positivo | neutro | negativo
+    temperature: Mapped[str | None] = mapped_column(String(16), nullable=True)    # quente | morno | frio
+    is_mql: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    mql_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_stage: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    stage_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)            # 0-10, nota do atendimento
+    criteria: Mapped[dict] = mapped_column(JSON, default=dict)                   # nota por criterio
+    strengths: Mapped[list] = mapped_column(JSON, default=list)
+    improvements: Mapped[list] = mapped_column(JSON, default=list)
+    objections: Mapped[list] = mapped_column(JSON, default=list)                 # categorias
+    objection_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_stage: Mapped[str | None] = mapped_column(String(16), nullable=True)  # etapa que a IA moveu
+
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class User(Base):

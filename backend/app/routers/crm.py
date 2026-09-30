@@ -17,7 +17,9 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import access
 from app import campaigns as campaigns_service
+from app import funnel as funnel_service
 from app import journey as journey_service
 from app import crm as crm_service
 from app import numbers as numbers_service
@@ -30,13 +32,7 @@ from app.services import evolution, meta_ads
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
-STAGE_LABELS = {
-    "novo": "Novo",
-    "atendendo": "Atendendo",
-    "qualificado": "Qualificado",
-    "ganho": "Ganho",
-    "perdido": "Perdido",
-}
+STAGE_LABELS = funnel_service.LABELS
 
 
 def serialize(
@@ -54,6 +50,17 @@ def serialize(
         "name": contact.name,
         "profile_pic_url": contact.profile_pic_url,
         "stage": contact.stage,
+        "stage_source": contact.stage_source,
+        # quando o lead alcancou cada etapa do funil
+        "milestones": {
+            "mql": contact.mql_at,
+            "conversando": contact.conversation_at,
+            "agendado": contact.scheduled_at,
+            "compareceu": contact.attended_at,
+            "fechado": contact.closed_at,
+            "perdido": contact.lost_at,
+        },
+        "deal_value": contact.deal_value,
         "note": contact.note,
         "origin": contact.origin,
         "unread_count": contact.unread_count or 0,
@@ -126,6 +133,7 @@ async def _serialize_many(session: AsyncSession, rows, counts: dict | None = Non
 
 
 async def _require_number(session: AsyncSession, number_id: int) -> WaNumber:
+    access.ensure_number(number_id)
     number = await session.get(WaNumber, number_id)
     if number is None:
         raise HTTPException(status_code=404, detail="Linha não encontrada.")
@@ -160,9 +168,7 @@ async def list_contacts(
         ).all()
     )
 
-    stmt = select(Contact).limit(limit)
-    if number_id is not None:
-        stmt = stmt.where(Contact.wa_number_id == number_id)
+    stmt = access.scope(select(Contact).limit(limit), Contact.wa_number_id, number_id)
     if stage:
         if stage not in CONTACT_STAGES:
             raise HTTPException(status_code=400, detail=f"Etapa inválida: {stage}")
@@ -209,9 +215,7 @@ async def campaigns(
     number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)
 ):
     """Leads agrupados por origem/campanha — o filtro e o resumo do topo do CRM."""
-    stmt = select(Contact)
-    if number_id is not None:
-        stmt = stmt.where(Contact.wa_number_id == number_id)
+    stmt = access.scope(select(Contact), Contact.wa_number_id, number_id)
     rows = (await session.execute(stmt)).scalars().all()
 
     conv_stmt = select(Conversion.contact_id, func.count()).group_by(Conversion.contact_id)
@@ -239,7 +243,7 @@ async def campaigns(
             },
         )
         g["contacts"] += 1
-        g["won"] += 1 if item["stage"] == "ganho" else 0
+        g["won"] += 1 if item["stage"] == "fechado" else 0
         g["with_conversion"] += 1 if item["conversions"] else 0
         if src["ad_id"] and src["ad_id"] not in g["ad_ids"]:
             g["ad_ids"].append(src["ad_id"])
@@ -267,8 +271,19 @@ async def resolve_campaigns(
     session: AsyncSession = Depends(get_session),
 ):
     """Consulta na Marketing API a campanha dos anúncios dos leads dessa linha."""
-    cfg = await _CfgCache(session).get(number_id)
-    return await campaigns_service.resolve_for_number(session, cfg, number_id, force=force)
+    ids = access.number_ids_or_all(number_id)
+    if ids is None:
+        cfg = await _CfgCache(session).get(number_id)
+        return await campaigns_service.resolve_for_number(session, cfg, number_id, force=force)
+    # usuario de operacao: consulta linha por linha das dele
+    total: dict = {"ads": 0, "checked": 0, "resolved": 0, "errors": [], "has_token": False}
+    for nid in ids:
+        out = await campaigns_service.resolve_for_number(session, await _CfgCache(session).get(nid), nid, force=force)
+        for k in ("ads", "checked", "resolved"):
+            total[k] += out.get(k, 0)
+        total["errors"] += out.get("errors", [])
+        total["has_token"] = total["has_token"] or out.get("has_token", False)
+    return total
 
 
 class CampaignIn(BaseModel):
@@ -285,6 +300,13 @@ async def set_campaign(ad_id: str, payload: CampaignIn, session: AsyncSession = 
     Fica marcada como manual e a consulta automática nunca a sobrescreve.
     Mandar tudo vazio desfaz o manual e devolve o anúncio para a consulta.
     """
+    if access.is_restricted():
+        # so mexe em anuncio que trouxe lead pra uma linha dele
+        owned = await session.execute(
+            access.scope(select(Contact.id).where(Contact.source_id == ad_id).limit(1), Contact.wa_number_id)
+        )
+        if owned.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Anúncio não encontrado nas suas linhas.")
     row = await session.get(AdCampaign, ad_id)
     fields = payload.model_dump()
     if not any((v or "").strip() for v in fields.values()):
@@ -315,7 +337,7 @@ async def pipeline(
     """Contagem por etapa + os totais que o cabeçalho do CRM mostra."""
 
     def scoped(stmt):
-        return stmt if number_id is None else stmt.where(Contact.wa_number_id == number_id)
+        return access.scope(stmt, Contact.wa_number_id, number_id)
 
     by_stage = dict(
         (await session.execute(scoped(select(Contact.stage, func.count()).group_by(Contact.stage)))).all()
@@ -358,7 +380,7 @@ async def activity(
     """
 
     def scoped(stmt):
-        return stmt if number_id is None else stmt.where(Contact.wa_number_id == number_id)
+        return access.scope(stmt, Contact.wa_number_id, number_id)
 
     contacts = (await session.execute(scoped(select(func.count(Contact.id))))).scalar_one()
     # `last_seen_at` tem onupdate: qualquer mexida na conversa (etapa, nota,
@@ -369,16 +391,16 @@ async def activity(
     ).scalar_one()
 
     msg_stmt = select(func.count(Message.id), func.max(Message.id))
-    if number_id is not None:
-        msg_stmt = msg_stmt.join(Contact, Message.contact_id == Contact.id).where(
-            Contact.wa_number_id == number_id
+    if number_id is not None or access.is_restricted():
+        msg_stmt = access.scope(
+            msg_stmt.join(Contact, Message.contact_id == Contact.id), Contact.wa_number_id, number_id
         )
     messages, last_message_id = (await session.execute(msg_stmt)).one()
 
     conv_stmt = select(func.count(Conversion.id))
-    if number_id is not None:
-        conv_stmt = conv_stmt.join(Contact, Conversion.contact_id == Contact.id).where(
-            Contact.wa_number_id == number_id
+    if number_id is not None or access.is_restricted():
+        conv_stmt = access.scope(
+            conv_stmt.join(Contact, Conversion.contact_id == Contact.id), Contact.wa_number_id, number_id
         )
     conversions = (await session.execute(conv_stmt)).scalar_one()
 
@@ -403,8 +425,7 @@ async def activity(
 @router.get("/contacts/{contact_id}")
 async def get_contact(contact_id: int, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
 
     msgs = (
         (
@@ -490,7 +511,9 @@ async def message_payload(message_id: int, session: AsyncSession = Depends(get_s
     Evolution, nao entregue por ela. Nesse caso `webhook` vem nulo e so `raw` existe.
     """
     message = await session.get(Message, message_id)
-    if message is None:
+    if message is None or not access.can_see(
+        (await session.get(Contact, message.contact_id)).wa_number_id if message.contact_id else None
+    ):
         raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
 
     log_row = (
@@ -528,6 +551,8 @@ async def message_payload(message_id: int, session: AsyncSession = Depends(get_s
 
 class ContactPatch(BaseModel):
     stage: str | None = None
+    # valor do fechamento (receita do funil); so vale com a etapa "fechado"
+    deal_value: float | None = None
     note: str | None = None
     name: str | None = None
     mark_read: bool = False
@@ -538,17 +563,15 @@ async def patch_contact(
     contact_id: int, payload: ContactPatch, session: AsyncSession = Depends(get_session)
 ):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
 
     if payload.stage is not None:
         if payload.stage not in CONTACT_STAGES:
             raise HTTPException(status_code=400, detail=f"Etapa inválida: {payload.stage}")
         if payload.stage != contact.stage:
-            from datetime import datetime, timezone
-
-            contact.stage = payload.stage
-            contact.stage_changed_at = datetime.now(timezone.utc)
+            funnel_service.set_manual(contact, payload.stage, payload.deal_value)
+    if payload.deal_value is not None and (payload.stage or contact.stage) == "fechado":
+        contact.deal_value = payload.deal_value
     if payload.note is not None:
         contact.note = payload.note or None
     if payload.name is not None:
@@ -587,8 +610,7 @@ async def sync_messages(
 ):
     """Histórico dessa conversa, buscado na Evolution. Não dispara regra nenhuma."""
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
     if contact.wa_number_id is None:
         raise HTTPException(status_code=400, detail="Conversa sem linha: não sei em qual instância buscar.")
 
@@ -615,8 +637,7 @@ async def reply(contact_id: int, payload: ReplyIn, session: AsyncSession = Depen
     palavra-chave. Gravar dos dois lados duplicaria a conversa e o disparo.
     """
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
     if contact.wa_number_id is None:
         raise HTTPException(status_code=400, detail="Conversa sem linha: não sei por qual número enviar.")
 

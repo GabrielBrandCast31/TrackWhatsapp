@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import numbers as numbers_service
+from app import access
 from app.db import get_session
 from app.ingest import build_simulated_payload, ingest_payload
 from app.models import Contact, Conversion, Message, WebhookLog
@@ -53,8 +54,7 @@ async def list_contacts(
         (await session.execute(select(Conversion.contact_id, func.count()).group_by(Conversion.contact_id))).all()
     )
     stmt = select(Contact).order_by(desc(Contact.last_seen_at)).limit(limit)
-    if number_id is not None:
-        stmt = stmt.where(Contact.wa_number_id == number_id)
+    stmt = access.scope(stmt, Contact.wa_number_id, number_id)
     if only_attributed:
         stmt = stmt.where(
             (Contact.ctwa_clid.is_not(None))
@@ -69,8 +69,7 @@ async def list_contacts(
 @router.get("/contacts/{contact_id}")
 async def get_contact(contact_id: int, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Contato nao encontrado.")
+    access.ensure_contact(contact)
 
     msgs = (
         (
@@ -133,6 +132,7 @@ async def simulate_inbound(
 ):
     """Injeta um payload identico ao da Meta — testa o fluxo inteiro sem anuncio no ar."""
     try:
+        access.ensure_number(number_id or payload.number_id)
         number = await numbers_service.require(session, number_id or payload.number_id)
     except numbers_service.NumberError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -157,8 +157,7 @@ async def webhook_logs(
     session: AsyncSession = Depends(get_session),
 ):
     stmt = select(WebhookLog).order_by(desc(WebhookLog.id)).limit(limit)
-    if number_id is not None:
-        stmt = stmt.where(WebhookLog.wa_number_id == number_id)
+    stmt = access.scope(stmt, WebhookLog.wa_number_id, number_id)
     rows = (await session.execute(stmt)).scalars().all()
     return [
         {

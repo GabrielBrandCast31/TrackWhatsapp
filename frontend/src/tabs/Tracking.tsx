@@ -41,6 +41,7 @@ type Draft = {
   once_per_contact: boolean
   is_test: boolean
   active: boolean
+  set_stage: string | null
 }
 
 const NEW_RULE: Draft = {
@@ -55,6 +56,7 @@ const NEW_RULE: Draft = {
   once_per_contact: true,
   is_test: false,
   active: true,
+  set_stage: null,
 }
 
 function toDraft(rule: KeywordRule): Draft {
@@ -70,6 +72,7 @@ function toDraft(rule: KeywordRule): Draft {
     once_per_contact: rule.once_per_contact,
     is_test: rule.is_test,
     active: rule.active,
+    set_stage: rule.set_stage ?? null,
   }
 }
 
@@ -228,8 +231,15 @@ function SimulationBanner({ result, text }: { result: SimulationResult | null; t
   }
   return (
     <div className="rounded-lg border border-wa-500/30 bg-wa-900/30 px-3 py-2 text-xs leading-relaxed text-wa-500">
-      <strong>Dispararia o evento {result.event_name}</strong>
-      {result.value !== null ? ` com valor ${money(result.value, result.currency)}` : ' sem valor'}. {result.reason}{' '}
+      {result.event_name === '__none__' ? (
+        <strong>Casaria — o lead avança na etapa do funil, sem evento.</strong>
+      ) : (
+        <>
+          <strong>Dispararia o evento {result.event_name}</strong>
+          {result.value !== null ? ` com valor ${money(result.value, result.currency)}` : ' sem valor'}.
+        </>
+      )}{' '}
+      {result.reason}{' '}
       {result.value_note}
     </div>
   )
@@ -344,6 +354,20 @@ function RuleEditor({
         </div>
         <TrashButton onClick={() => void remove()} title="remover regra" />
       </div>
+
+      <Field
+        label="Mover o lead no funil para"
+        hint="Quando a palavra-chave aparecer, o lead avança para essa etapa (nunca volta). Ex.: “agendamento confirmado” → Agendamento confirmado."
+      >
+        <Select value={draft.set_stage ?? ''} onChange={(e) => patch({ set_stage: e.target.value || null })}>
+          <option value="">Não mexer na etapa</option>
+          {(catalog.stages ?? []).map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </Select>
+      </Field>
 
       <Field label="Palavra-chave" hint="O termo que aparece na mensagem para o evento disparar.">
         <Input
@@ -467,7 +491,7 @@ function ObjectiveEvents({
   const [draft, setDraft] = useState<Record<string, string>>(instance.objective_events ?? {})
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
-  const events = catalog.events.filter((e) => e.name !== '__objective__')
+  const events = catalog.events.filter((e) => e.name !== '__objective__' && e.name !== '__none__')
 
   useEffect(() => {
     setDraft(instance.objective_events ?? {})

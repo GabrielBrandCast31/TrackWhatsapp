@@ -181,6 +181,14 @@ def build_event(number: WaNumber | None, data: dict, ip: str | None, user_agent:
 
     url = _clip(data.get("page_url"), "long")
     parsed = urlparse(url) if url else None
+    if not current and parsed and parsed.query:
+        # evento sem o bloco `utm` (ex.: envio de formulario feito pelo servidor):
+        # as UTMs da propria URL valem — senao o gclid da URL viraria origem sem campanha
+        try:
+            query = parse_qs(parsed.query)
+        except ValueError:
+            query = {}
+        current = {f: _clip(query[f"utm_{f}"][0]) for f in UTM_FIELDS if query.get(f"utm_{f}")}
 
     event = TrackingEvent(
         wa_number_id=number.id if number else None,

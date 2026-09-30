@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import journey
+from app import access, journey
 from app.db import get_session
 from app.models import Contact, TrackingEvent, WaNumber
 
@@ -51,7 +51,7 @@ def _since(days: int) -> datetime:
 
 
 def _scoped(stmt, model, number_id: int | None):
-    return stmt if number_id is None else stmt.where(model.wa_number_id == number_id)
+    return access.scope(stmt, model.wa_number_id, number_id)
 
 
 def _lead(contact: Contact | None) -> dict | None:
@@ -100,6 +100,7 @@ def _origin_of(rows) -> dict:
 # ---------------------------------------------------------------------------
 
 async def _number(session: AsyncSession, number_id: int) -> WaNumber:
+    access.ensure_number(number_id)
     number = await session.get(WaNumber, number_id)
     if number is None:
         raise HTTPException(status_code=404, detail="Linha não encontrada.")
@@ -347,7 +348,11 @@ def _answers(summary: dict, lead: dict | None) -> list[dict]:
 
 
 async def _journey_payload(session: AsyncSession, tl: str, number_id: int | None, contact: Contact | None = None) -> dict:
+    if number_id is not None:
+        access.ensure_number(number_id)
     events = await journey.events_for(session, tl, number_id)
+    # jornada de linha que o usuario nao ve nao aparece nem pelo TL_ID
+    events = [e for e in events if access.can_see(e.wa_number_id)]
     if contact is None:
         contact = (
             await session.execute(
@@ -367,8 +372,7 @@ async def _journey_payload(session: AsyncSession, tl: str, number_id: int | None
 @router.get("/contact/{contact_id}")
 async def contact_journey(contact_id: int, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
     if not contact.transaction_id:
         return {"summary": None, "events": [], "lead": _lead(contact), "answers": []}
     return await _journey_payload(session, contact.transaction_id, contact.wa_number_id, contact)
@@ -381,8 +385,7 @@ class LinkIn(BaseModel):
 @router.post("/contact/{contact_id}/link")
 async def link_contact(contact_id: int, payload: LinkIn, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
     tl = payload.transaction_id.strip()
     if not journey.TL_ID_SHAPE.match(tl):
         raise HTTPException(status_code=422, detail="TL_ID em formato inválido.")
@@ -394,8 +397,7 @@ async def link_contact(contact_id: int, payload: LinkIn, session: AsyncSession =
 @router.delete("/contact/{contact_id}/link")
 async def unlink_contact(contact_id: int, session: AsyncSession = Depends(get_session)):
     contact = await session.get(Contact, contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    access.ensure_contact(contact)
     for field in ("transaction_id", "visitor_id", "session_id", "match_method", "match_score", "landing_page", "page_url"):
         setattr(contact, field, None)
     contact.first_utm, contact.last_utm = {}, {}

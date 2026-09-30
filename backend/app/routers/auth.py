@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import auth
+from app import access, auth
 from app.db import get_session
 from app.models import User
 
@@ -56,6 +56,8 @@ class UserIn(BaseModel):
     password: str
     name: str | None = None
     role: str = "user"
+    # linhas (clientes) que esse usuario enxerga; admin ve todas de qualquer jeito
+    number_ids: list[int] = []
 
 
 class UserPatch(BaseModel):
@@ -63,6 +65,24 @@ class UserPatch(BaseModel):
     role: str | None = None
     active: bool | None = None
     password: str | None = None
+    number_ids: list[int] | None = None
+
+
+async def _valid_numbers(session: AsyncSession, ids: list[int]) -> list[int]:
+    from app.models import WaNumber
+
+    wanted = sorted(set(ids))
+    if not wanted:
+        return []
+    found = (await session.execute(select(WaNumber.id).where(WaNumber.id.in_(wanted)))).scalars().all()
+    missing = set(wanted) - set(found)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Linha(s) inexistente(s): {sorted(missing)}")
+    return wanted
+
+
+async def _full(session: AsyncSession, user: User) -> dict:
+    return {**serialize(user), "number_ids": await access.numbers_of(session, user.id)}
 
 
 async def _by_username(session: AsyncSession, username: str) -> User | None:
@@ -133,7 +153,7 @@ async def list_users(
     _: User = Depends(auth.require_admin), session: AsyncSession = Depends(get_session)
 ):
     rows = (await session.execute(select(User).order_by(User.username))).scalars().all()
-    return [serialize(u) for u in rows]
+    return [await _full(session, u) for u in rows]
 
 
 @router.post("/users", status_code=201)
@@ -162,8 +182,10 @@ async def create_user(
         role=payload.role,
     )
     session.add(user)
+    await session.flush()
+    await access.set_numbers(session, user.id, await _valid_numbers(session, payload.number_ids))
     await session.commit()
-    return serialize(user)
+    return await _full(session, user)
 
 
 async def _admins_left(session: AsyncSession, excluding: int) -> int:
@@ -209,9 +231,11 @@ async def patch_user(
         user.role = data["role"]
     if "active" in data:
         user.active = bool(data["active"])
+    if data.get("number_ids") is not None:
+        await access.set_numbers(session, user.id, await _valid_numbers(session, data["number_ids"]))
 
     await session.commit()
-    return serialize(user)
+    return await _full(session, user)
 
 
 @router.delete("/users/{user_id}", status_code=204)

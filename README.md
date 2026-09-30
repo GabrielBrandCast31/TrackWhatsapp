@@ -23,6 +23,8 @@ tag do site, Pixel, token e palavras-chave próprios. Um seletor no topo define 
 | Aba | O que faz |
 |---|---|
 | **Jornadas** | o funil (jornadas → clique no WhatsApp → lead com origem), origem por mídia, método de match e cada jornada reconstruída |
+| **Atendimento** | o funil por etapa (Leads → MQL → continuaram a conversa → agendamento → comparecimento → fechamento), o tempo de resposta e a análise de atendimento com IA |
+| **Formulários** | páginas de captação em `/f/{slug}` no mesmo domínio, geradas por IA (Gemini) a partir de um método de qualificação; cada resposta vira conversa no CRM da linha |
 | **Tag do site** | o snippet da tag da linha, o que ela registra e o simulador de jornada inteira |
 | **Conexão** | cadastra a instância (URL, apikey, nome), pareia por QR e grava o webhook |
 | **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
@@ -160,6 +162,128 @@ aconteceu de verdade — "Agradecemos a confiança", "Seu horário está confirm
 cadastra esse termo, e o evento sai sozinho quando ele aparecer. Cada regra tem um
 **simulador**: cole a mensagem e veja, antes de valer no chat, se dispararia e com que
 valor.
+
+## Atendimento: funil, tempo de resposta e IA
+
+### O funil de atendimento
+
+As etapas do CRM **são** o funil: `novo` → `mql` → `conversando` → `agendado` →
+`compareceu` → `fechado` (e `perdido`, que é saída, não degrau). O funil conta pelo **marco**
+de cada etapa (`mql_at`, `conversation_at`, `scheduled_at`, `attended_at`, `closed_at`), não
+pela etapa atual: quem fechou conta em todas as anteriores, e quem foi perdido continua
+contando até onde chegou — a tela mostra em qual degrau cada perdido parou.
+
+| Etapa | Como o lead chega nela |
+|---|---|
+| **Leads MQL** | à mão, por regra de palavra-chave ou pela análise da IA |
+| **Continuaram a conversa** | automático: o lead MQL voltou a responder depois do atendente. Lead não qualificado que responde não pula etapa — o sinal fica guardado e vale quando ele virar MQL |
+| **Agendamento confirmado** | à mão, pela IA ou por regra — ex.: o atendente escreve “agendamento confirmado” |
+| **Compareceu na clínica** | à mão, pela IA ou por regra (“obrigado pela visita”) |
+| **Fechamento** | à mão (o CRM pede o **valor**, que vira a receita do funil), pela IA ou por regra |
+
+Tudo que não é manual **só avança**: regra, IA e automático nunca rebaixam o que alguém
+moveu, e nunca reabrem um lead perdido. A mudança manual pode voltar etapa (é correção) e
+apaga os marcos depois da nova etapa.
+
+**Regras que movem etapa.** Em *Rastreamento → Eventos por palavra-chave*, cada regra ganhou
+*Mover o lead no funil para*. O evento pode ser *“Nenhum — só mover a etapa do funil”*: aí a
+regra não manda nada ao Meta e não exige `ctwa_clid`.
+
+A aba mostra ainda o **funil por origem** (jornada do site, anúncio, UTM, orgânico) e o
+**tempo mediano até cada etapa**, contado da entrada do lead.
+
+Na migração, as etapas antigas viram: `atendendo` → `novo` (o sinal "o atendente respondeu"
+fica em `first_response_at`), `qualificado` → `mql`, `ganho` → `fechado`.
+
+### Tempo de resposta
+
+A unidade é a **espera**: o cliente manda uma ou várias mensagens seguidas e espera; a espera
+termina na primeira mensagem do atendente. A primeira espera da conversa é a **primeira
+resposta**. A tela mostra mediana (o normal), média (puxada pela madrugada) e p90, a fatia
+respondida em até 5 min, as faixas de tempo, a mediana por hora do dia e por dia da semana
+(fuso em `APP_TIMEZONE`, padrão `America/Sao_Paulo`) e **quem está esperando agora**. Cada
+conversa do CRM mostra os mesmos números em *Atendimento e IA*.
+
+### Análise de atendimento com IA
+
+O **Claude** (`claude-opus-5-5`, pensamento adaptativo, saída em JSON schema) lê a conversa —
+com a hora de cada mensagem e quanto o atendente levou para responder — e devolve: resumo,
+sentimento, temperatura do lead, se é **MQL** e por quê, a **etapa sugerida**, a nota do
+atendimento (0–10) e por critério (agilidade, cordialidade, clareza, entendeu a necessidade,
+conduziu ao agendamento, contornou objeções), as **objeções** por categoria, pontos fortes, o
+que melhorar e a **próxima ação**.
+
+- **Chave:** *Atendimento → Análise com IA* (só admin) ou `ANTHROPIC_API_KEY` no `.env`.
+  Guardada como segredo — a tela só mostra o final.
+- **Uma conversa:** botão *analisar com IA* no painel do contato do CRM.
+- **Em lote:** *analisar 20 / 100 conversas* — pega só as sem análise ou com mensagem nova
+  desde a última, 3 por vez, em segundo plano.
+- **Etapa:** com *IA move a etapa sozinha* ligado, a sugestão avança o lead (nunca rebaixa e
+  nunca marca perdido — perder lead é decisão humana). Desligado, o painel mostra um botão
+  para aplicar a sugestão.
+- **Visão geral:** nota média, taxa de MQL, temperatura, sentimento, nota por critério,
+  objeções mais comuns e os pontos de melhoria que mais se repetem, com a lista das conversas
+  da pior nota para a melhor.
+- A conversa vai para o modelo como **dado**, dentro de `<conversa>` — texto do cliente não
+  vira instrução. Recusa por segurança cai num modelo de reserva (`fallbacks: "default"`).
+- `AI_MODEL` e `AI_EFFORT` (padrão `medium`) no `.env` trocam modelo e esforço. Cada análise é
+  uma chamada cobrada na conta da Anthropic; os tokens ficam gravados em `conversation_analyses`.
+
+```bash
+cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_attendance.py
+```
+
+## Formulários de captação
+
+Aba **Formulários**: páginas estilo Typeform publicadas em `https://seu.dominio/f/{slug}` —
+o **mesmo domínio do painel**, sem login — para usar como destino das campanhas. É o mesmo
+módulo do BrandCastERP, adaptado para cá: aqui o "cliente" do formulário é a **linha**.
+
+- **Gerar com IA**: escolha um dos 11 métodos de qualificação (BANT, CHAMP, SPIN, MEDDIC,
+  GPCTBA/C&I, ANUM, FAINT, NEAT, SCOTSMAN, Diagnóstico de Marketing, Captação rápida) e
+  conte o negócio, a oferta e o público — o **Gemini** escreve as perguntas. Sem chave, cota
+  estourada ou resposta quebrada, o botão entrega o modelo pronto do método. Nada é
+  publicado sem revisão no editor.
+- **Editor** em 6 categorias (Geral, Aparência, Perguntas, Comportamento, Notificações,
+  Integrações), com busca (Ctrl+K), prévia ao vivo, 11 tipos de campo, logo, paletas, uma
+  pergunta por vez ou página única, capa, consentimento LGPD e redirecionamento.
+- **Cada resposta** vira conversa no **CRM da linha** (nome, telefone e e-mail saem dos tipos
+  das perguntas; as respostas vão para a nota e aparecem em *Formulário respondido* no
+  painel do contato), avisa a equipe no WhatsApp **pela própria instância da linha**, manda o
+  `Lead` pro Meta (Pixel + Conversions API com o mesmo `event_id`) e faz POST no webhook.
+- **Jornada**: com *Rastrear a jornada nesta página* ligado, a página carrega a tag da linha
+  — UTMs, `gclid`/`fbclid` e TL_ID da visita — e o envio leva o TL_ID. O lead chega no CRM
+  com a origem da campanha já recuperada (`match_method = transaction_id`).
+- **Abrir o WhatsApp da linha ao terminar**: o lead cai na conversa com a mensagem pronta e o
+  `tl=` anexado — a conversa que chega já vem ligada ao formulário. Precisa do número da linha
+  (conectada) ou de um número informado no editor.
+- Proteções da página pública: honeypot, limite de envios por IP, validação no servidor
+  (obrigatórios, e-mail, telefone, opção fora da lista), token da CAPI e webhook nunca expostos,
+  webhook bloqueado para rede interna (libere hosts em `FORM_WEBHOOK_ALLOW_HOSTS`).
+
+A chave do Gemini fica em `GEMINI_API_KEY` no `.env` (e, opcional, `GEMINI_API_KEY_FALLBACK`).
+Os modelos são tentados em cadeia (`gemini-3.6-flash` → `3.5-flash` → …): a cota gratuita é
+por modelo, e 503/429 num deles cai no seguinte.
+
+## Cada usuário vê só os clientes dele
+
+- **Admin** vê todas as linhas (clientes), todos os formulários, todos os usuários.
+- **Operação** (ex.: o Nicolas) vê só as linhas marcadas para ele em *Admin → Usuários →
+  Linhas que vê*. Isso vale para tudo: seletor de linha, CRM, jornadas, atendimento, IA,
+  formulários, regras, conversões e os números do topo. "Todas as linhas" para ele é "todas as
+  **dele**".
+- Quem cadastra uma linha nova fica dono dela automaticamente.
+- Acesso por id a algo de outra linha responde **404** (não confirma que existe).
+- Regra de palavra-chave "para todas as linhas" é só para admin — ela valeria na linha de
+  todo mundo.
+
+O filtro mora no login (`app/access.py`): a mesma dependência que exige usuário em todo `/api`
+carrega as linhas permitidas, e cada rota filtra por elas.
+
+```bash
+cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_access.py
+cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_forms.py
+```
 
 ## Subir
 
@@ -593,6 +717,12 @@ rebaixado pelo automático.
 ```
 backend/app/
   __init__.py             carrega o .env antes de qualquer submodulo
+  access.py               quem vê o quê: linhas permitidas por usuário (admin vê todas)
+  forms.py                formulários: validação, resposta -> lead no CRM, jornada, avisos
+  form_ai.py              métodos de qualificação + geração das perguntas com o Gemini
+  funnel.py               funil de atendimento: ordem, marcos e "automático só avança"
+  attendance.py           tempo de resposta (esperas, mediana, faixas, por hora)
+  ai_analysis.py          análise da conversa com o Claude (JSON schema) e o agregado
   journey.py              jornada do lead: TL_ID, first/last touch, match da conversa
                           (transaction_id -> protocolo -> temporal) e o resumo da jornada
   static/tl.js            a tag do site (servida em /t/tl.js com a chave da linha)
@@ -616,6 +746,8 @@ backend/app/
   migrations.py           ALTER TABLE idempotente rodado no startup
   routers/
     collect.py            publico: /t/tl.js e /t/collect (eventos da tag, sem login)
+    forms.py              formulários (painel por linha) e as rotas públicas de /f/{slug}
+    attendance.py         funil, tempo de resposta, análise com IA (uma, em lote, visão geral)
     journeys.py           funil, lista, detalhe, jornada do contato, ligar à mão e simulador
     evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
     rules.py              regras de palavra-chave + /simulate
@@ -644,6 +776,9 @@ backend/tests/
   test_auth.py            fumaça do login: 401 sem token, papéis, refresh, troca de senha
   test_payload.py         webhook -> mensagem -> payload cru servido sob demanda
   test_campaigns.py       etiqueta de origem, cache de campanha e evento pelo objetivo
+  test_access.py          admin vê tudo, operação só as linhas dela (login de verdade)
+  test_forms.py           painel, página pública, resposta -> lead com jornada
+  test_attendance.py      funil, tempo de resposta, regra que move etapa e a IA (com dublê)
   test_journey.py         coletor, regra de atribuição e os três métodos de match
 ```
 
