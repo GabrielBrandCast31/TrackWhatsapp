@@ -315,6 +315,18 @@ rede interna do compose. Ponha um proxy com TLS (Caddy, Nginx, Traefik) na frent
 e aponte `PUBLIC_BASE_URL` pro domínio HTTPS — a Evolution precisa alcançar o webhook por
 HTTPS, e o token de login não deve trafegar em texto claro.
 
+O `deploy-vps.sh` já faz essa parte: instala nginx + certbot no host, emite o certificado
+Let's Encrypt de `track.agenciabrandcast.com.br` (troque com `DOMAIN=outro.dominio`, ou
+desligue com `DOMAIN=`) e põe o nginx em 80/443 na frente da `3031`. A renovação é
+automática (timer do certbot + reload do nginx).
+
+```bash
+CERT_EMAIL=voce@agenciabrandcast.com.br bash deploy-vps.sh
+```
+
+Na Cloudflare: registro **A** `track` → IP da VPS (pode ficar com a nuvem laranja) e
+**SSL/TLS → Full (strict)**. No firewall da VPS, abra **80** e **443**.
+
 Depois de subir: entre no painel, vá em **Admin → Usuários**, crie a conta de cada pessoa
 e troque a senha do admin inicial.
 
