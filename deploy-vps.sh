@@ -107,8 +107,10 @@ fi
 # ------------------------------------------------------------------ 2. IP/env
 step "2/8 Ajustando os .env para esta maquina"
 
-IP="${PUBLIC_IP:-$(curl -s --max-time 8 ifconfig.me || true)}"
-[ -n "$IP" ] || IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# So IPv4: com IPv6 a URL "http://IP:porta" sai invalida (precisaria de colchetes)
+# e o registro A da Cloudflare tambem e IPv4.
+IP="${PUBLIC_IP:-$(curl -4 -s --max-time 8 ifconfig.me || true)}"
+[ -n "$IP" ] || IP="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$' || true)"
 [ -n "$IP" ] || err "nao consegui descobrir o IP. Passe manualmente: PUBLIC_IP=1.2.3.4 bash deploy-vps.sh"
 info "IP desta maquina: $IP"
 
