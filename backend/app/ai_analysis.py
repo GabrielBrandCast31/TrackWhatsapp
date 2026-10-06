@@ -1,7 +1,7 @@
-"""Analise de atendimento com IA (Claude): o que aconteceu na conversa, se o lead
+"""Analise de atendimento com IA (Gemini): o que aconteceu na conversa, se o lead
 e MQL, em que etapa do funil ele esta e como foi o atendimento.
 
-Uma chamada por conversa, com saida estruturada (JSON schema): a tela e o
+Uma chamada por conversa, com saida em JSON no formato de `SCHEMA`: a tela e o
 agregado dependem de campos fixos — nota por criterio, categoria de objecao,
 etapa sugerida — e nao de texto livre que muda de forma a cada resposta.
 
@@ -12,20 +12,18 @@ instrucoes" no WhatsApp).
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 
-import anthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import attendance, funnel
+from app import attendance, form_ai, funnel
 from app.models import Contact, ConversationAnalysis, Message
 
 log = logging.getLogger(__name__)
 
-MODEL = os.getenv("AI_MODEL", "claude-opus-5-5")
-EFFORT = os.getenv("AI_EFFORT", "medium")
+# a mesma cadeia de modelos do Gemini dos formularios (form_ai.GEMINI_MODELS)
+MODEL = form_ai.GEMINI_MODEL
 MAX_MESSAGES = 400          # conversa maior que isso: as mais recentes
 MIN_MESSAGES = 2            # "oi" sozinho nao tem atendimento pra avaliar
 
@@ -151,58 +149,14 @@ def _clamp(value, lo=0.0, hi=10.0) -> float | None:
         return None
 
 
-def _client(api_key: str) -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=api_key)
-
-
-# trocado nos testes por um dublê — o teste nao sai pra rede
-client_factory = _client
-
-
-async def _call(api_key: str, user_content: str) -> tuple[dict, dict]:
-    client = client_factory(api_key)
-    response = await client.beta.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        system=SYSTEM,
-        thinking={"type": "adaptive"},
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
-        # recusa por categoria de seguranca cai num modelo de reserva, sem lista a manter
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        messages=[{"role": "user", "content": user_content}],
-    )
-    usage = {
-        "input_tokens": getattr(response.usage, "input_tokens", None),
-        "output_tokens": getattr(response.usage, "output_tokens", None),
-        "model": getattr(response, "model", MODEL),
-    }
-    if response.stop_reason == "refusal":
-        raise RuntimeError("a IA recusou analisar esta conversa")
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError("a resposta da IA foi cortada (max_tokens)")
-    text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
-    if not text:
-        raise RuntimeError("a IA não devolveu a análise")
-    return json.loads(text), usage
-
-
-def provider(api_key: str) -> str | None:
-    """Qual IA analisa: Claude com a chave da Anthropic; sem ela, o Gemini do .env."""
-    from app import form_ai
-
-    if api_key:
-        return "claude"
-    if form_ai.is_available():
-        return "gemini"
-    return None
+def provider() -> str | None:
+    """Quem analisa: o Gemini do .env (GEMINI_API_KEY). None = nenhuma IA configurada."""
+    return "gemini" if form_ai.is_available() else None
 
 
 async def _call_gemini(user_content: str) -> tuple[dict, dict]:
-    """Mesma analise pelo Gemini. Ele nao aceita este schema como restricao, entao
-    o schema vai no prompt e a resposta passa pela mesma limpeza da do Claude."""
-    from app import form_ai
-
+    """O Gemini nao aceita este schema como restricao (additionalProperties, enum
+    em array), entao o schema vai no prompt e a resposta passa pela limpeza de `analyze`."""
     prompt = (
         f"{user_content}\n\nResponda APENAS com um objeto JSON que siga exatamente este "
         f"JSON Schema (sem texto fora do JSON):\n{json.dumps(SCHEMA, ensure_ascii=False)}"
@@ -211,29 +165,16 @@ async def _call_gemini(user_content: str) -> tuple[dict, dict]:
     data = form_ai._parse_json_object(text)
     if not data or not data.get("summary"):
         raise RuntimeError("o Gemini não devolveu a análise no formato esperado")
-    return data, {"model": form_ai.GEMINI_MODEL}
+    return data, {"model": MODEL}
 
 
-def _error_message(exc: Exception) -> str:
-    if isinstance(exc, anthropic.AuthenticationError):
-        return "Chave da API da Anthropic inválida."
-    if isinstance(exc, anthropic.PermissionDeniedError):
-        return "A chave da Anthropic não tem permissão para esse modelo."
-    if isinstance(exc, anthropic.RateLimitError):
-        return "Limite de uso da API da Anthropic atingido. Tente de novo em instantes."
-    if isinstance(exc, anthropic.BadRequestError):
-        return f"Requisição recusada pela API: {exc.message}"
-    if isinstance(exc, anthropic.APIStatusError):
-        return f"Erro da API da Anthropic ({exc.status_code})."
-    if isinstance(exc, anthropic.APIConnectionError):
-        return "Não consegui falar com a API da Anthropic (rede)."
-    return str(exc) or exc.__class__.__name__
+# trocado nos testes por um dublê — o teste nao sai pra rede
+call_ai = _call_gemini
 
 
 async def analyze(
     session: AsyncSession,
     contact: Contact,
-    api_key: str,
     *,
     apply_stage: bool = False,
 ) -> ConversationAnalysis:
@@ -261,9 +202,8 @@ async def analyze(
         row.status, row.error = "error", "Conversa curta demais para analisar."
         await session.commit()
         return row
-    which = provider(api_key)
-    if which is None:
-        row.status, row.error = "error", "Nenhuma IA configurada: GEMINI_API_KEY no .env ou a chave da Anthropic em Atendimento → IA."
+    if provider() is None:
+        row.status, row.error = "error", "Nenhuma IA configurada: preencha GEMINI_API_KEY no .env."
         await session.commit()
         return row
 
@@ -275,10 +215,10 @@ async def analyze(
     content = f"{header}\n<conversa>\n{transcript(contact, msgs)}\n</conversa>"
 
     try:
-        data, usage = await (_call(api_key, content) if which == "claude" else _call_gemini(content))
+        data, usage = await call_ai(content)
     except Exception as exc:  # noqa: BLE001 — qualquer falha vira analise com erro visivel na tela
         log.warning("analise da conversa %s falhou: %s", contact.id, exc)
-        row.status, row.error = "error", _error_message(exc)
+        row.status, row.error = "error", f"Gemini: {str(exc)[:300] or exc.__class__.__name__}"
         await session.commit()
         return row
 

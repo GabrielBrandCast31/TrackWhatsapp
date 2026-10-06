@@ -412,6 +412,29 @@ async def profile_picture(cfg: dict, number: str) -> str | None:
     return None
 
 
+async def whatsapp_id(cfg: dict, number: str) -> str | None:
+    """Como o WhatsApp enxerga esse telefone: os digitos do jid, ou None se o
+    numero nao tem WhatsApp (ou a consulta falhou).
+
+    No Brasil o jid de muito celular antigo nao tem o nono digito (5531993370270
+    vira 553193370270) — e nao da pra deduzir pelo DDD, so perguntando.
+    """
+    try:
+        body = await _request(
+            cfg, "POST", f"/chat/whatsappNumbers/{_instance(cfg)}", json={"numbers": [number]}
+        )
+    except EvolutionError as exc:
+        log.info("evolution: consulta de numero falhou: %s", exc)
+        return None
+    rows = body if isinstance(body, list) else (body or {}).get("data") if isinstance(body, dict) else None
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("exists") and row.get("jid"):
+            jid = str(row["jid"])
+            if jid.endswith("@s.whatsapp.net"):
+                return jid.split("@", 1)[0].split(":", 1)[0] or None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # envio
 # ---------------------------------------------------------------------------

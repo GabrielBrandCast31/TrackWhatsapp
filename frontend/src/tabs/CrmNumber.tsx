@@ -834,7 +834,7 @@ function ContactInfo({
       <ContactFormAnswers contactId={detail.id} render={(body) => <Section title="Formulário respondido">{body}</Section>} />
       <Section
         title="Atendimento e IA"
-        info="Tempo de resposta desta conversa e a análise do Claude: nota do atendimento, MQL, etapa sugerida, objeções e próxima ação."
+        info="Tempo de resposta desta conversa e a análise do Gemini: nota do atendimento, MQL, etapa sugerida, objeções e próxima ação."
       >
         <ContactAttendanceCard contactId={detail.id} onChanged={() => void refresh()} />
       </Section>

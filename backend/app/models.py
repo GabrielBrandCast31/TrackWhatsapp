@@ -642,7 +642,7 @@ class UserNumber(Base):
 
 
 class ConversationAnalysis(Base):
-    """Avaliacao de uma conversa feita pela IA (Claude).
+    """Avaliacao de uma conversa feita pela IA (Gemini).
 
     Uma linha por analise: guarda a foto da conversa naquele momento
     (`last_message_id`), entao da pra saber se ela ja esta velha — chegou

@@ -166,34 +166,25 @@ async def _ai_cfg(session: AsyncSession) -> dict:
 @router.get("/ai-config")
 async def ai_config(session: AsyncSession = Depends(get_session)):
     cfg = await _ai_cfg(session)
-    key = cfg.get("anthropic_api_key") or ""
-    which = ai_analysis.provider(key)
-    from app import form_ai
+    which = ai_analysis.provider()
 
     return {
-        # Claude quando ha chave da Anthropic; sem ela, o Gemini do .env
+        # a analise roda no Gemini, com a GEMINI_API_KEY do .env
         "configured": which is not None,
         "provider": which,
-        "anthropic_configured": bool(key),
-        "gemini_configured": form_ai.is_available(),
-        "key_hint": f"...{key[-4:]}" if len(key) >= 4 else "",
-        "model": ai_analysis.MODEL if which == "claude" else form_ai.GEMINI_MODEL if which == "gemini" else None,
-        "effort": ai_analysis.EFFORT,
+        "model": ai_analysis.MODEL if which else None,
         "auto_apply_stage": bool(cfg.get("ai_auto_apply_stage")),
         "criteria": [{"key": k, "label": v} for k, v in ai_analysis.CRITERIA.items()],
     }
 
 
 class AiConfigIn(BaseModel):
-    anthropic_api_key: str | None = None
     auto_apply_stage: bool | None = None
 
 
 @router.put("/ai-config", dependencies=[Depends(auth.require_admin)])
 async def put_ai_config(payload: AiConfigIn, session: AsyncSession = Depends(get_session)):
     patch: dict = {}
-    if payload.anthropic_api_key is not None:
-        patch["anthropic_api_key"] = payload.anthropic_api_key.strip()
     if payload.auto_apply_stage is not None:
         patch["ai_auto_apply_stage"] = payload.auto_apply_stage
     await settings_store.save(session, patch)
@@ -239,7 +230,7 @@ async def analyze_contact(contact_id: int, session: AsyncSession = Depends(get_s
     access.ensure_contact(contact)
     cfg = await _ai_cfg(session)
     row = await ai_analysis.analyze(
-        session, contact, cfg.get("anthropic_api_key") or "", apply_stage=bool(cfg.get("ai_auto_apply_stage"))
+        session, contact, apply_stage=bool(cfg.get("ai_auto_apply_stage"))
     )
     await session.refresh(contact)
     return {"analysis": ai_analysis.serialize(row, contact), "stage": contact.stage}
@@ -299,7 +290,7 @@ async def _candidates(session: AsyncSession, number_id: int | None, limit: int, 
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def _run_batch(key: int, ids: list[int], api_key: str, apply: bool) -> None:
+async def _run_batch(key: int, ids: list[int], apply: bool) -> None:
     job = _jobs[key]
     sem = asyncio.Semaphore(3)
 
@@ -309,7 +300,7 @@ async def _run_batch(key: int, ids: list[int], api_key: str, apply: bool) -> Non
                 contact = await session.get(Contact, contact_id)
                 if contact is None:
                     return
-                row = await ai_analysis.analyze(session, contact, api_key, apply_stage=apply)
+                row = await ai_analysis.analyze(session, contact, apply_stage=apply)
                 job["done"] += 1
                 if row.status != "ok":
                     job["errors"] += 1
@@ -332,9 +323,8 @@ async def analyze_batch(payload: BatchIn, session: AsyncSession = Depends(get_se
     if _jobs.get(key, {}).get("running"):
         raise HTTPException(status_code=409, detail="Já existe uma análise em lote rodando para essa linha.")
     cfg = await _ai_cfg(session)
-    api_key = cfg.get("anthropic_api_key") or ""
-    if ai_analysis.provider(api_key) is None:
-        raise HTTPException(status_code=400, detail="Nenhuma IA configurada: GEMINI_API_KEY no .env ou a chave da Anthropic.")
+    if ai_analysis.provider() is None:
+        raise HTTPException(status_code=400, detail="Nenhuma IA configurada: preencha GEMINI_API_KEY no .env.")
     ids = await _candidates(session, payload.number_id, payload.limit, payload.only_stale)
     _jobs[key] = {
         "running": bool(ids),
@@ -346,7 +336,7 @@ async def analyze_batch(payload: BatchIn, session: AsyncSession = Depends(get_se
         "finished_at": None if ids else datetime.now(timezone.utc),
     }
     if ids:
-        asyncio.create_task(_run_batch(key, ids, api_key, bool(cfg.get("ai_auto_apply_stage"))))
+        asyncio.create_task(_run_batch(key, ids, bool(cfg.get("ai_auto_apply_stage"))))
     return _jobs[key]
 
 

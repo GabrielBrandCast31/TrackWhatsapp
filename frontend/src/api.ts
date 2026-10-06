@@ -1291,13 +1291,9 @@ export type ContactAttendance = {
 
 export type AiConfig = {
   configured: boolean
-  /** quem analisa: Claude (chave da Anthropic) ou, sem ela, o Gemini do .env */
-  provider: 'claude' | 'gemini' | null
-  anthropic_configured: boolean
-  gemini_configured: boolean
-  key_hint: string
+  /** a análise roda no Gemini, com a GEMINI_API_KEY do .env */
+  provider: 'gemini' | null
   model: string | null
-  effort: string
   auto_apply_stage: boolean
   criteria: { key: string; label: string }[]
 }
@@ -1342,7 +1338,7 @@ export const attendanceApi = {
       body: JSON.stringify({ stage }),
     }),
   aiConfig: () => request<AiConfig>('/api/attendance/ai-config'),
-  saveAiConfig: (patch: { anthropic_api_key?: string; auto_apply_stage?: boolean }) =>
+  saveAiConfig: (patch: { auto_apply_stage?: boolean }) =>
     request<AiConfig>('/api/attendance/ai-config', { method: 'PUT', body: JSON.stringify(patch) }),
   aiOverview: (numberId?: number, days = 30) =>
     request<AiOverview>(`/api/attendance/ai-overview${qs({ number_id: numberId, days })}`),

@@ -191,7 +191,9 @@ fi
 # ----------------------------------------------------------------- 5. sobe o track
 step "5/8 Subindo o tracker"
 
-run docker compose --project-directory "$TRACK_DIR" up -d
+# --build: sem ele o compose reaproveita a imagem antiga e o codigo do git pull
+# nunca entra no container.
+run docker compose --project-directory "$TRACK_DIR" up -d --build
 if [ "$DRY_RUN" -eq 0 ]; then
   for i in $(seq 1 30); do
     docker compose --project-directory "$TRACK_DIR" exec -T backend \

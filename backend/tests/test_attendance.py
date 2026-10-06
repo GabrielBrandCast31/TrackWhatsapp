@@ -1,7 +1,7 @@
 """Funil de atendimento, tempo de resposta e analise com IA.
 
-A API da Anthropic e trocada por um dublê (`ai_analysis.client_factory`): o
-teste nao sai para a rede. Roda num SQLite temporario:
+O Gemini e trocado por um dublê (`form_ai.generate_text`): o teste nao sai
+para a rede. Roda num SQLite temporario:
 
     cd backend && ./.venv/bin/python tests/test_attendance.py
 
@@ -9,7 +9,6 @@ Sai com codigo 1 se qualquer checagem falhar.
 """
 import asyncio, json, os, pathlib, sys, tempfile
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -19,7 +18,7 @@ os.environ["GEMINI_API_KEY"] = ""
 
 from httpx import ASGITransport, AsyncClient
 
-from app import ai_analysis, attendance, auth, funnel
+from app import ai_analysis, attendance, auth, form_ai, funnel
 from app.db import SessionLocal, init_db
 from app.evolution_ingest import build_simulated_payload, ingest_event
 from app.main import app
@@ -45,7 +44,7 @@ def at(minutes):
     return T0 + timedelta(minutes=minutes)
 
 
-# --- dublê da API da Anthropic ---------------------------------------------
+# --- dublê do Gemini ---------------------------------------------
 sent: list[dict] = []
 REPLY = {
     "summary": "Lead pediu preço de implante e agendou avaliação para quinta às 15h.",
@@ -65,22 +64,12 @@ REPLY = {
 }
 
 
-class FakeMessages:
-    async def create(self, **kwargs):
-        sent.append(kwargs)
-        return SimpleNamespace(
-            stop_reason="end_turn",
-            model=kwargs["model"],
-            usage=SimpleNamespace(input_tokens=900, output_tokens=300),
-            content=[SimpleNamespace(type="text", text=json.dumps(REPLY))],
-        )
+async def fake_generate_text(prompt, system):
+    sent.append({"prompt": prompt, "system": system})
+    return json.dumps(REPLY)
 
 
-def fake_factory(api_key):
-    return SimpleNamespace(beta=SimpleNamespace(messages=FakeMessages()))
-
-
-ai_analysis.client_factory = fake_factory
+form_ai.generate_text = fake_generate_text
 app.dependency_overrides[auth.require_user] = lambda: None
 app.dependency_overrides[auth.require_admin] = lambda: None
 
@@ -160,21 +149,22 @@ async def main():
         print("IA")
         r = await http.post(f"/api/attendance/contact/{cid}/analyze")
         a = r.json()["analysis"]
-        check("sem chave: análise com erro explicado", a["status"] == "error" and "chave" in a["error"].lower(), a)
+        check("sem chave: análise com erro explicado", a["status"] == "error" and "GEMINI_API_KEY" in a["error"], a)
         check("sem chave: não chama a API", not sent)
 
-        await http.put("/api/attendance/ai-config", json={"anthropic_api_key": "sk-ant-test-1234", "auto_apply_stage": True})
+        os.environ["GEMINI_API_KEY"] = "AIza-teste-1234"
+        await http.put("/api/attendance/ai-config", json={"auto_apply_stage": True})
         cfg = (await http.get("/api/attendance/ai-config")).json()
-        check("chave salva e mascarada", cfg["configured"] and cfg["key_hint"] == "...1234" and "sk-ant" not in json.dumps(cfg))
+        check("Gemini configurado pelo .env, sem expor a chave",
+              cfg["configured"] and cfg["provider"] == "gemini" and "AIza" not in json.dumps(cfg), cfg)
 
         r = await http.post(f"/api/attendance/contact/{cid}/analyze")
         a = r.json()["analysis"]
         req = sent[-1]
-        check("modelo claude-opus-5-5 com thinking adaptativo", req["model"] == "claude-opus-5-5" and req["thinking"] == {"type": "adaptive"})
-        check("saída estruturada por JSON schema", req["output_config"]["format"]["type"] == "json_schema")
-        check("fallback do servidor ligado", req["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in req["betas"])
+        check("análise gravada com o modelo do Gemini", a["status"] == "ok" and a["model"] == form_ai.GEMINI_MODEL, a)
+        check("schema da resposta vai no prompt", '"suggested_stage"' in req["prompt"] and "JSON Schema" in req["prompt"])
         check("conversa vai como dado, com tempo de resposta",
-              "<conversa>" in req["messages"][0]["content"] and "respondeu em" in req["messages"][0]["content"])
+              "<conversa>" in req["prompt"] and "respondeu em" in req["prompt"] and "nunca instrução" in req["system"])
         check("nota limitada a 10", a["score"] == 10, a["score"])
         check("objeção fora do catálogo descartada", [o["key"] for o in a["objections"]] == ["preco"])
         check("etapa já alcançada não é reaplicada", a["applied_stage"] is None and r.json()["stage"] == "agendado")

@@ -63,6 +63,16 @@ def merge_into(keep: Contact, dup: Contact) -> None:
     keep.unread_count = (keep.unread_count or 0) + (dup.unread_count or 0)
 
 
+async def absorb(session: AsyncSession, keep: Contact, dup: Contact) -> None:
+    """`dup` some dentro de `keep`: dados, mensagens, respostas e analises. Sem commit."""
+    merge_into(keep, dup)
+    for model in _CHILDREN:
+        await session.execute(update(model).where(model.contact_id == dup.id).values(contact_id=keep.id))
+    session.expunge(dup)
+    await session.execute(delete(Contact).where(Contact.id == dup.id))
+    log.info("contato %s (%s) juntado ao %s (%s)", dup.id, dup.wa_id, keep.id, keep.wa_id)
+
+
 async def merge_duplicates(session: AsyncSession) -> int:
     """Junta os pares que so diferem pelo nono digito. Devolve quantos sairam."""
     rows = (
@@ -82,14 +92,7 @@ async def merge_duplicates(session: AsyncSession) -> int:
         group.sort(key=lambda c: (c.origin == "form", c.id))
         keep, *dups = group
         for dup in dups:
-            merge_into(keep, dup)
-            for model in _CHILDREN:
-                await session.execute(
-                    update(model).where(model.contact_id == dup.id).values(contact_id=keep.id)
-                )
-            session.expunge(dup)
-            await session.execute(delete(Contact).where(Contact.id == dup.id))
-            log.info("contato %s (%s) juntado ao %s (%s)", dup.id, dup.wa_id, keep.id, keep.wa_id)
+            await absorb(session, keep, dup)
             merged += 1
     if merged:
         await session.commit()

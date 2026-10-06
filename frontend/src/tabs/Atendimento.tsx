@@ -14,7 +14,7 @@ import {
 import { AnalysisBody, CriteriaBars, ScoreRing, TemperatureChip } from '../AttendanceParts'
 import { useAuth } from '../authContext'
 import { useNumber } from '../numberContext'
-import { Badge, Banner, Button, Card, Empty, Info, Input, money, Toggle, when } from '../ui'
+import { Badge, Banner, Button, Card, Empty, Info, money, Toggle, when } from '../ui'
 
 const PERIODS = [
   { value: 7, label: '7 dias' },
@@ -304,50 +304,27 @@ function ResponseSection({ data }: { data: ResponseTimes }) {
 
 function AiSetup({ cfg, onSaved }: { cfg: AiConfig; onSaved: (c: AiConfig) => void }) {
   const { isAdmin } = useAuth()
-  const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
   const save = async (patch: Parameters<typeof attendanceApi.saveAiConfig>[0]) => {
-    setBusy(true)
-    try {
-      onSaved(await attendanceApi.saveAiConfig(patch))
-      setKey('')
-    } finally {
-      setBusy(false)
-    }
+    onSaved(await attendanceApi.saveAiConfig(patch))
   }
   return (
     <div className="flex flex-wrap items-center gap-3 text-[12px]">
-      {cfg.provider === 'claude' ? (
-        <Badge tone="good">Claude conectado · chave {cfg.key_hint}</Badge>
-      ) : cfg.provider === 'gemini' ? (
+      {cfg.provider === 'gemini' ? (
         <Badge tone="good">Gemini conectado (GEMINI_API_KEY do .env)</Badge>
       ) : (
-        <Badge tone="warn">nenhuma IA configurada</Badge>
+        <Badge tone="warn">Gemini não configurado — preencha GEMINI_API_KEY no .env</Badge>
       )}
-      <span className="text-ink-500">
-        modelo <span className="font-mono text-ink-300">{cfg.model}</span>
-      </span>
-      {isAdmin ? (
-        <>
-          <div className="w-64">
-            <Input
-              type="password"
-              placeholder={cfg.anthropic_configured ? 'trocar chave da Anthropic (sk-ant-…)' : 'opcional: chave da Anthropic para usar o Claude'}
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-            />
-          </div>
-          <Button size="sm" variant="primary" disabled={busy || key.trim().length < 10} onClick={() => void save({ anthropic_api_key: key })}>
-            salvar chave
-          </Button>
-          <Toggle
-            checked={cfg.auto_apply_stage}
-            onChange={(v) => void save({ auto_apply_stage: v })}
-            label="IA move a etapa sozinha (só avança)"
-          />
-        </>
-      ) : (
-        !cfg.configured && <span className="text-ink-500">peça a um administrador para configurar a chave</span>
+      {cfg.model && (
+        <span className="text-ink-500">
+          modelo <span className="font-mono text-ink-300">{cfg.model}</span>
+        </span>
+      )}
+      {isAdmin && (
+        <Toggle
+          checked={cfg.auto_apply_stage}
+          onChange={(v) => void save({ auto_apply_stage: v })}
+          label="IA move a etapa sozinha (só avança)"
+        />
       )}
     </div>
   )
@@ -444,7 +421,7 @@ function AiSection({ numberId, days }: { numberId?: number; days: number }) {
           {error && <Banner tone="warn">{error}</Banner>}
           <p className="text-[11px] text-ink-500">
             O lote pega só conversas sem análise ou com mensagem nova desde a última — cada conversa é uma chamada à IA
-            ({cfg.provider === 'claude' ? 'Anthropic' : 'Google Gemini'}), cobrada na sua conta.
+            (Google Gemini), cobrada na sua conta.
           </p>
         </div>
       </Card>

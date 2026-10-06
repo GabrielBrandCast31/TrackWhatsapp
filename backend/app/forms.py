@@ -393,6 +393,12 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
         number = await session.get(WaNumber, form.wa_number_id) if form.wa_number_id else None
         resumo = "\n".join(f"{labels[k]}: {v}" for k, v in clean.items() if v)
 
+        if number is not None and number.channel == "evolution":
+            try:
+                await fix_wa_id(session, number, response_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("formulario %s: conferir o numero no WhatsApp falhou: %s", form.id, exc)
+
         if form.whatsapp_notify and number is not None:
             try:
                 from app.services import evolution
@@ -417,6 +423,40 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
                 await send_webhook(form, response_id, clean, labels, url)
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: webhook falhou: %s", form.id, exc)
+
+
+async def fix_wa_id(session: AsyncSession, number: WaNumber, response_id: int) -> None:
+    """Troca o telefone digitado pelo id que o WhatsApp usa (com ou sem o nono
+    digito — so a Evolution sabe). Assim o card do formulario ja nasce com o
+    numero da conversa, e se a conversa ja existe, os dois viram um so.
+    """
+    from app import dedupe
+    from app.services import evolution
+
+    response = await session.get(FormResponse, response_id)
+    contact = await session.get(Contact, response.contact_id) if response and response.contact_id else None
+    if contact is None or not contact.phone_e164:
+        return
+    cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
+    wa_id = await evolution.whatsapp_id(cfg, contact.wa_id)
+    if not wa_id or wa_id == contact.wa_id:
+        return
+    existing = (
+        await session.execute(
+            select(Contact)
+            .where(Contact.wa_id == wa_id, Contact.id != contact.id)
+            .where(Contact.wa_number_id.is_(None) | (Contact.wa_number_id == contact.wa_number_id))
+            .order_by(Contact.wa_number_id.is_(None), Contact.id)
+        )
+    ).scalars().first()
+    if existing is not None:
+        # a pessoa ja conversava: a conversa fica, e herda o formulario
+        await dedupe.absorb(session, existing, contact)
+    else:
+        log.info("formulario: contato %s %s -> %s (id do WhatsApp)", contact.id, contact.wa_id, wa_id)
+        contact.wa_id = wa_id
+        contact.phone_e164 = phones.to_e164(wa_id)
+    await session.commit()
 
 
 # ---------------------------------------------------------------------------

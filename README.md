@@ -206,15 +206,15 @@ conversa do CRM mostra os mesmos números em *Atendimento e IA*.
 
 ### Análise de atendimento com IA
 
-O **Claude** (`claude-opus-5-5`, pensamento adaptativo, saída em JSON schema) lê a conversa —
+O **Gemini** (mesma chave e cadeia de modelos dos formulários, resposta em JSON) lê a conversa —
 com a hora de cada mensagem e quanto o atendente levou para responder — e devolve: resumo,
 sentimento, temperatura do lead, se é **MQL** e por quê, a **etapa sugerida**, a nota do
 atendimento (0–10) e por critério (agilidade, cordialidade, clareza, entendeu a necessidade,
 conduziu ao agendamento, contornou objeções), as **objeções** por categoria, pontos fortes, o
 que melhorar e a **próxima ação**.
 
-- **Chave:** *Atendimento → Análise com IA* (só admin) ou `ANTHROPIC_API_KEY` no `.env`.
-  Guardada como segredo — a tela só mostra o final.
+- **Chave:** `GEMINI_API_KEY` no `.env` (opcional `GEMINI_API_KEY_FALLBACK`), a mesma dos
+  formulários. A tela de Atendimento mostra se está configurada.
 - **Uma conversa:** botão *analisar com IA* no painel do contato do CRM.
 - **Em lote:** *analisar 20 / 100 conversas* — pega só as sem análise ou com mensagem nova
   desde a última, 3 por vez, em segundo plano.
@@ -225,9 +225,10 @@ que melhorar e a **próxima ação**.
   objeções mais comuns e os pontos de melhoria que mais se repetem, com a lista das conversas
   da pior nota para a melhor.
 - A conversa vai para o modelo como **dado**, dentro de `<conversa>` — texto do cliente não
-  vira instrução. Recusa por segurança cai num modelo de reserva (`fallbacks: "default"`).
-- `AI_MODEL` e `AI_EFFORT` (padrão `medium`) no `.env` trocam modelo e esforço. Cada análise é
-  uma chamada cobrada na conta da Anthropic; os tokens ficam gravados em `conversation_analyses`.
+  vira instrução. O formato da resposta (JSON schema) vai no prompt, e a resposta é limpa antes
+  de gravar (nota limitada a 0–10, objeção fora do catálogo descartada).
+- `GEMINI_MODEL` no `.env` troca o modelo; 503/429 num modelo cai no próximo da cadeia. Cada
+  análise é uma chamada cobrada na conta do Google AI Studio.
 
 ```bash
 cd backend && PYTHONPATH=$PWD ./.venv/bin/python tests/test_attendance.py
@@ -734,7 +735,7 @@ backend/app/
   form_ai.py              métodos de qualificação + geração das perguntas com o Gemini
   funnel.py               funil de atendimento: ordem, marcos e "automático só avança"
   attendance.py           tempo de resposta (esperas, mediana, faixas, por hora)
-  ai_analysis.py          análise da conversa com o Claude (JSON schema) e o agregado
+  ai_analysis.py          análise da conversa com o Gemini (JSON) e o agregado
   journey.py              jornada do lead: TL_ID, first/last touch, match da conversa
                           (transaction_id -> protocolo -> temporal) e o resumo da jornada
   static/tl.js            a tag do site (servida em /t/tl.js com a chave da linha)
