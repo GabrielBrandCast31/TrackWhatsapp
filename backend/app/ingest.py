@@ -64,6 +64,25 @@ def _ts(message: dict) -> datetime:
         return datetime.now(timezone.utc)
 
 
+async def find_by_phone(session: AsyncSession, wa_id: str, scoped) -> Contact | None:
+    """Contato com o mesmo telefone a menos do nono digito.
+
+    O formulario grava o telefone como a pessoa digitou (5531993370270) e o
+    WhatsApp entrega o wa_id sem o nono digito (553193370270): sem isso a mesma
+    pessoa vira duas conversas. `scoped` aplica o escopo de linha e a ordem.
+    """
+    key = phones.match_key(wa_id)
+    if not key or len(key) < 10:
+        return None
+    # os 8 ultimos digitos nao mudam com o nono digito — filtram no banco antes
+    # de a comparacao canonica confirmar o par (mesma ideia de `link_prospect`)
+    stmt = scoped(select(Contact).where(Contact.wa_id.like(f"%{key[-8:]}")))
+    for contact in (await session.execute(stmt)).scalars().all():
+        if contact.phone_e164 and phones.match_key(contact.wa_id) == key:
+            return contact
+    return None
+
+
 async def upsert_contact(
     session: AsyncSession,
     wa_id: str,
@@ -72,11 +91,15 @@ async def upsert_contact(
     phone_number_id: str | None,
     wa_number_id: int | None,
     lid: str | None = None,
+    keep_wa_id: bool = False,
 ) -> tuple[Contact, bool]:
     """Contato da conversa, criando se nao existir.
 
     `lid` e o identificador LID do WhatsApp, quando a conversa chega por ele. Se
     `wa_id` for igual ao `lid`, o telefone dessa pessoa ainda e desconhecido.
+
+    `keep_wa_id`: o `wa_id` veio de fora do WhatsApp (formulario) e nao deve
+    substituir o de um contato achado pelo telefone — o do WhatsApp e o que vale.
     """
     def _scoped(stmt):
         if wa_number_id is None:
@@ -87,6 +110,13 @@ async def upsert_contact(
     order = (Contact.wa_number_id.is_(None), Contact.id)
     stmt = _scoped(select(Contact).where(Contact.wa_id == wa_id))
     contact = (await session.execute(stmt.order_by(*order))).scalars().first()
+
+    if contact is None and not (lid and wa_id == lid):
+        contact = await find_by_phone(session, wa_id, lambda s: _scoped(s).order_by(*order))
+        if contact is not None and not keep_wa_id:
+            log.info("contato %s: telefone %s casado pelo nono digito com %s", contact.id, wa_id, contact.wa_id)
+            contact.wa_id = wa_id
+            contact.phone_e164 = to_e164(wa_id)
 
     if contact is None and lid and lid != wa_id:
         # o telefone apareceu numa conversa que ate agora so tinha LID: promove o

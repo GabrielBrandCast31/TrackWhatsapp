@@ -88,6 +88,8 @@ app.include_router(conversions_router.router, dependencies=_logged_in)
 # --- so admin (prospeccao, Cloud API, destinos extras) ---
 app.include_router(config_router.router, dependencies=_admin_only)
 app.include_router(numbers_router.router, dependencies=_admin_only)
+# a parte de conectar um numero da Cloud API fica na aba Conexao, com escopo por usuario
+app.include_router(numbers_router.lines_router, dependencies=_logged_in)
 app.include_router(prospecting_router.router, dependencies=_admin_only)
 
 # --- publico: quem chama e a Evolution/Meta, autenticando pelo token da URL ou
@@ -111,6 +113,11 @@ async def on_startup() -> None:
         from app import funnel
 
         await funnel.backfill(session)
+    async with SessionLocal() as session:
+        # lead do formulario + conversa do WhatsApp que viraram dois contatos
+        from app import dedupe
+
+        await dedupe.merge_duplicates(session)
     # fila de abordagem que sobrou de um restart volta a andar sozinha
     async with SessionLocal() as session:
         pending = (

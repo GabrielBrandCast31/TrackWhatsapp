@@ -493,6 +493,23 @@ export const prospectApi = {
     download(`/api/prospect/prospects.csv${qs(filters as Record<string, unknown>)}`, 'prospects.csv'),
 }
 
+/** Cloud API pela aba Conexão: qualquer usuário, só as linhas dele. */
+export const cloudLinesApi = {
+  list: () => request<WaNumber[]>('/api/cloud/lines'),
+  create: (payload: Record<string, unknown>) =>
+    request<WaNumber>('/api/cloud/lines', { method: 'POST', body: JSON.stringify(payload) }),
+  patch: (id: number, patch: Record<string, unknown>) =>
+    request<WaNumber>(`/api/cloud/lines/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  remove: (id: number) => request<void>(`/api/cloud/lines/${id}`, { method: 'DELETE' }),
+  status: (id: number) => request<ConnectionStatus>(`/api/cloud/lines/${id}/status`),
+  subscribe: (id: number) => request<unknown>(`/api/cloud/lines/${id}/subscribe`, { method: 'POST' }),
+  sendTest: (id: number, to: string, body: string) =>
+    request<unknown>(`/api/cloud/lines/${id}/send-test`, {
+      method: 'POST',
+      body: JSON.stringify({ to, body }),
+    }),
+}
+
 export const numbersApi = {
   list: (channel?: 'cloud' | 'evolution') => request<WaNumber[]>(`/api/numbers${qs({ channel })}`),
   get: (id: number) => request<WaNumber>(`/api/numbers/${id}`),

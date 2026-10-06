@@ -30,6 +30,7 @@ from app.evolution_ingest import (
     text_of,
     timestamp_of,
 )
+from app.ingest import find_by_phone
 from app.models import Contact, Message, WaNumber
 from app.services import evolution
 from app.tracking import to_e164
@@ -156,6 +157,13 @@ async def _upsert(
 
     stmt = scoped(select(Contact).where(Contact.wa_id == wa_id))
     contact = (await session.execute(stmt)).scalars().first()
+
+    if contact is None and not (lid and wa_id == lid):
+        # lead do formulario, gravado com o nono digito: veja `find_by_phone`
+        contact = await find_by_phone(session, wa_id, scoped)
+        if contact is not None:
+            contact.wa_id = wa_id
+            contact.phone_e164 = to_e164(wa_id)
 
     if contact is None and lid and lid != wa_id:
         # mesma pessoa, ja conhecida so pelo LID: promove em vez de duplicar

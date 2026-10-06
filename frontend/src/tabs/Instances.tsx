@@ -10,6 +10,7 @@ import {
   type EvoStatus,
 } from '../api'
 import { useNumber } from '../numberContext'
+import CloudLines from './CloudLines'
 import { Badge, Banner, Button, Card, Copy, Empty, Field, Input, Json, Textarea, Toggle, when } from '../ui'
 
 type Draft = {
@@ -531,7 +532,7 @@ function WebhookLogs() {
   )
 }
 
-export default function Instances({ onChanged }: { onChanged: () => void }) {
+function EvolutionLines({ onChanged }: { onChanged: () => void }) {
   const { numbers, reload, loading } = useNumber()
   const [defaults, setDefaults] = useState<EvoDefaults | null>(null)
   const [adding, setAdding] = useState(false)
@@ -612,6 +613,60 @@ export default function Instances({ onChanged }: { onChanged: () => void }) {
       )}
 
       {numbers.length > 0 && <WebhookLogs />}
+    </div>
+  )
+}
+
+const MODES = [
+  { id: 'evolution', label: 'Evolution API', hint: 'pareia o celular pelo QR code' },
+  { id: 'cloud', label: 'Cloud API oficial', hint: 'número sem celular, direto na Meta' },
+] as const
+
+type Mode = (typeof MODES)[number]['id']
+const MODE_KEY = 'wa.connection.mode'
+
+function readMode(): Mode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'cloud' ? 'cloud' : 'evolution'
+  } catch {
+    return 'evolution'
+  }
+}
+
+/** Duas formas de conectar uma linha: Evolution (celular + QR) ou Cloud API
+ *  (número que só existe na API da Meta e não tem QR para ler). */
+export default function Instances({ onChanged }: { onChanged: () => void }) {
+  const [mode, setModeState] = useState<Mode>(readMode)
+  const setMode = (m: Mode) => {
+    setModeState(m)
+    try {
+      localStorage.setItem(MODE_KEY, m)
+    } catch {
+      // sem storage: a escolha vale so pra sessao
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-2 sm:grid-cols-2">
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setMode(m.id)}
+            className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+              mode === m.id
+                ? 'border-wa-500/60 bg-wa-900/30'
+                : 'border-ink-800 bg-ink-900 hover:border-ink-600'
+            }`}
+          >
+            <span className={`block text-sm font-semibold ${mode === m.id ? 'text-ink-100' : 'text-ink-300'}`}>
+              {m.label}
+            </span>
+            <span className="mt-0.5 block text-[11px] text-ink-500">{m.hint}</span>
+          </button>
+        ))}
+      </div>
+      {mode === 'evolution' ? <EvolutionLines onChanged={onChanged} /> : <CloudLines onChanged={onChanged} />}
     </div>
   )
 }

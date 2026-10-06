@@ -344,9 +344,10 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
     if form.create_lead and number is not None and wa_id:
         contact, created = await upsert_contact(
             session, wa_id, nome or None, {}, numbers_service.evo_routing_key(number.evo_instance or ""),
-            number.id,
+            number.id, keep_wa_id=True,
         )
-        if created:
+        if created or contact.origin in ("webhook", "sync"):
+            # quem ja conversava e depois preencheu tambem passa a ser lead do formulario
             contact.origin = "form"
         await session.flush()
         if nome and not contact.name:

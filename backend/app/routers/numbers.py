@@ -7,6 +7,7 @@ config global crua.
 """
 
 import os
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import access, journey
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import get_session
@@ -445,3 +447,134 @@ async def _resolve(session: AsyncSession, number_id: int | None) -> tuple[WaNumb
         return await numbers_service.resolve_cfg(session, number_id)
     except numbers_service.NumberError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Cloud API na aba Conexao (qualquer usuario logado, so as linhas dele)
+# ---------------------------------------------------------------------------
+# O cadastro completo acima e do admin: mexe em destinos, padrao global e base
+# orfa. Aqui fica so o que conectar um numero precisa — credenciais, webhook,
+# teste — com o mesmo escopo por usuario das linhas da Evolution. E o caminho do
+# numero que vive direto na Cloud API, sem celular pra ler QR code.
+
+lines_router = APIRouter(prefix="/api/cloud", tags=["cloud"])
+
+
+class CloudLineIn(BaseModel):
+    label: str
+    phone_number_id: str
+    business_account_id: str | None = None
+    access_token: str | None = None
+    app_secret: str | None = None
+    verify_token: str | None = None
+    note: str | None = None
+
+
+class CloudLinePatch(BaseModel):
+    label: str | None = None
+    phone_number_id: str | None = None
+    business_account_id: str | None = None
+    access_token: str | None = None
+    app_secret: str | None = None
+    verify_token: str | None = None
+    note: str | None = None
+
+
+def _serialize_line(n: WaNumber, counts: dict | None = None) -> dict:
+    out = serialize_number(n, counts=counts)
+    out.pop("overrides", None)  # destinos por linha continuam coisa do admin
+    return out
+
+
+async def _require_cloud(session: AsyncSession, number_id: int) -> WaNumber:
+    number = await session.get(WaNumber, number_id)
+    if number is None or number.channel != "cloud" or not access.can_see(number.id):
+        raise HTTPException(status_code=404, detail="Linha não encontrada.")
+    return number
+
+
+@lines_router.get("/lines")
+async def list_cloud_lines(session: AsyncSession = Depends(get_session)):
+    rows = await numbers_service.list_numbers(session, channel="cloud")
+    return [_serialize_line(n, await _counts(session, n.id)) for n in rows if access.can_see(n.id)]
+
+
+@lines_router.post("/lines", status_code=201)
+async def create_cloud_line(payload: CloudLineIn, session: AsyncSession = Depends(get_session)):
+    phone_number_id = (payload.phone_number_id or "").strip()
+    if not phone_number_id.isdigit():
+        raise HTTPException(status_code=400, detail="Phone Number ID é o número de ID da Meta (só dígitos).")
+    if not (payload.access_token or "").strip():
+        raise HTTPException(status_code=400, detail="O Access Token é obrigatório.")
+    dupe = await numbers_service.by_phone_number_id(session, phone_number_id)
+    if dupe is not None:
+        # sem nome da linha: quem nao e dono dela nao precisa saber de quem e
+        raise HTTPException(status_code=400, detail="Esse Phone Number ID já está cadastrado.")
+
+    first_line = not await numbers_service.list_numbers(session)
+    number = WaNumber(
+        label=payload.label.strip() or phone_number_id,
+        channel="cloud",
+        phone_number_id=phone_number_id,
+        business_account_id=(payload.business_account_id or "").strip() or None,
+        access_token=payload.access_token.strip(),
+        app_secret=(payload.app_secret or "").strip() or None,
+        # token proprio por linha: o webhook dela nao depende do global
+        verify_token=(payload.verify_token or "").strip() or secrets.token_urlsafe(18),
+        site_key=journey.new_site_key(),
+        active=True,
+        note=payload.note,
+        overrides={},
+    )
+    session.add(number)
+    await session.flush()
+    if first_line:
+        await numbers_service.set_default(session, number)
+    # quem cadastra a linha fica dono dela (admin ja ve todas)
+    user = access.current_user()
+    if user is not None and user.role != "admin":
+        await access.grant(session, user.id, number.id)
+    await session.commit()
+    await session.refresh(number)
+    return _serialize_line(number)
+
+
+@lines_router.patch("/lines/{number_id}")
+async def patch_cloud_line(number_id: int, patch: CloudLinePatch, session: AsyncSession = Depends(get_session)):
+    await _require_cloud(session, number_id)
+    data = patch.model_dump(exclude_unset=True)
+    if data.get("phone_number_id") is not None and not str(data["phone_number_id"]).strip().isdigit():
+        raise HTTPException(status_code=400, detail="Phone Number ID é o número de ID da Meta (só dígitos).")
+    if data.get("phone_number_id"):
+        # checado aqui com mensagem neutra: a do admin diz o nome da linha dona
+        dupe = await numbers_service.by_phone_number_id(session, str(data["phone_number_id"]).strip())
+        if dupe is not None and dupe.id != number_id:
+            raise HTTPException(status_code=400, detail="Esse Phone Number ID já está cadastrado.")
+    await patch_number(number_id, NumberPatch(**data), session)
+    number = await _require_cloud(session, number_id)
+    return _serialize_line(number, await _counts(session, number.id))
+
+
+@lines_router.delete("/lines/{number_id}", status_code=204)
+async def delete_cloud_line(number_id: int, session: AsyncSession = Depends(get_session)):
+    """Tira a linha; a base dela fica sem dono (o apagar-tudo continua no admin)."""
+    await _require_cloud(session, number_id)
+    await delete_number(number_id, purge=False, session=session)
+
+
+@lines_router.get("/lines/{number_id}/status")
+async def cloud_line_status(number_id: int, session: AsyncSession = Depends(get_session)):
+    await _require_cloud(session, number_id)
+    return await number_status(number_id, session)
+
+
+@lines_router.post("/lines/{number_id}/subscribe")
+async def cloud_line_subscribe(number_id: int, session: AsyncSession = Depends(get_session)):
+    await _require_cloud(session, number_id)
+    return await subscribe(number_id, session)
+
+
+@lines_router.post("/lines/{number_id}/send-test")
+async def cloud_line_send_test(number_id: int, payload: SendTest, session: AsyncSession = Depends(get_session)):
+    await _require_cloud(session, number_id)
+    return await send_test(number_id, payload, session)

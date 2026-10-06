@@ -40,7 +40,7 @@ const TABS = [
   { id: 'forms', label: 'Formulários', hint: 'Captação com link próprio', Icon: IconForm },
   { id: 'sitetag', label: 'Tag do site', hint: 'TL_ID, eventos e simulador', Icon: IconCode },
   { id: 'crm', label: 'CRM', hint: 'Conversas com a origem', Icon: IconBoard },
-  { id: 'instances', label: 'Conexão', hint: 'Evolution API', Icon: IconPlug },
+  { id: 'instances', label: 'Conexão', hint: 'Evolution (QR) ou Cloud API', Icon: IconPlug },
   { id: 'tracking', label: 'Rastreamento', hint: 'Pixel, regras e ctwa_clid', Icon: IconRadar },
   { id: 'attribution', label: 'Atribuição', hint: 'Anúncio × conversa', Icon: IconTarget },
   { id: 'leads', label: 'Leads', hint: 'Base de contatos', Icon: IconUsers },
