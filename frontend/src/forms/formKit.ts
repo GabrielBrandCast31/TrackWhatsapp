@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: LeadFormSettings = {
   consent_text: "Autorizo o contato e o uso dos meus dados conforme a Política de Privacidade.",
   redirect_url: "", redirect_delay: 3,
   webhook_url: "",
+  meta_test_event_code: "",
   whatsapp_redirect: false, whatsapp_phone: "",
   whatsapp_message: "Olá! Acabei de preencher o formulário e quero falar com vocês.",
   track_journey: true,

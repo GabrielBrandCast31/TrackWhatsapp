@@ -127,6 +127,16 @@ def issue_tokens(user: User) -> dict:
     }
 
 
+def sign(claims: dict, kind: str, ttl: int) -> str:
+    """Token curto de outro tipo (ex.: `state` do OAuth), assinado com a mesma chave.
+
+    O `typ` impede que um sirva no lugar do outro: decode_token confere o tipo.
+    """
+    now = int(time.time())
+    payload = {**claims, "typ": kind, "iat": now, "exp": now + ttl, "jti": secrets.token_urlsafe(8)}
+    return jwt.encode(payload, _SECRET, algorithm=ALGORITHM)
+
+
 def decode_token(token: str, kind: str = "access") -> dict | None:
     """Claims do token, ou None se invalido/expirado/do tipo errado."""
     try:

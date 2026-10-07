@@ -66,6 +66,9 @@ DEFAULT_SETTINGS = {
     "redirect_url": "",
     "redirect_delay": 3,
     "webhook_url": "",
+    # codigo de Test Events do Meta: com ele preenchido a CAPI manda o Lead como
+    # teste (aparece em Eventos de teste e nao entra na otimizacao)
+    "meta_test_event_code": "",
     # ao terminar, abre o WhatsApp da linha com a mensagem pronta (e o TL_ID da
     # jornada anexado — a conversa que chega ja cai ligada ao formulario)
     "whatsapp_redirect": False,
@@ -155,6 +158,7 @@ def clean_settings(settings) -> dict:
     out["cover_button"] = out["cover_button"][:40] or DEFAULT_SETTINGS["cover_button"]
     out["branding_text"] = out["branding_text"][:120]
     out["whatsapp_phone"] = phones.digits(out["whatsapp_phone"])[:15]
+    out["meta_test_event_code"] = re.sub(r"\s", "", out["meta_test_event_code"])[:64]
     for k in ("redirect_url", "webhook_url"):
         if out[k] and not out[k].startswith(("http://", "https://")):
             out[k] = ""
@@ -501,6 +505,9 @@ async def send_capi_lead(form: LeadForm, nome: str, email: str, phone: str, ctx:
         # token no corpo, nao na URL (URL com credencial vaza em log)
         "access_token": form.capi_token,
     }
+    test_code = clean_settings(form.settings)["meta_test_event_code"]
+    if test_code:
+        payload["test_event_code"] = test_code
     url = f"https://graph.facebook.com/{API_VERSION}/{form.pixel_id}/events"
     async with httpx.AsyncClient(timeout=8) as client:
         r = await client.post(url, json=payload)

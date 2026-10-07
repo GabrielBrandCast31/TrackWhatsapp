@@ -47,6 +47,7 @@ from app.routers import crm as crm_router
 from app.routers import evolution as evolution_router
 from app.routers import forms as forms_router
 from app.routers import journeys as journeys_router
+from app.routers import meta as meta_router
 from app.routers import numbers as numbers_router
 from app.routers import prospecting as prospecting_router
 from app.routers import rules as rules_router
@@ -84,6 +85,8 @@ app.include_router(rules_router.router, dependencies=_logged_in)
 app.include_router(crm_router.router, dependencies=_logged_in)
 app.include_router(contacts_router.router, dependencies=_logged_in)
 app.include_router(conversions_router.router, dependencies=_logged_in)
+# conexao com o Facebook por OAuth, por linha (o router confere o acesso a linha)
+app.include_router(meta_router.router, dependencies=_logged_in)
 
 # --- so admin (prospeccao, Cloud API, destinos extras) ---
 app.include_router(config_router.router, dependencies=_admin_only)
@@ -95,6 +98,9 @@ app.include_router(prospecting_router.router, dependencies=_admin_only)
 # --- publico: quem chama e a Evolution/Meta, autenticando pelo token da URL ou
 # pela assinatura do payload ---
 app.include_router(webhook_router.router)
+# --- publico: callback do OAuth do Facebook, "Entrar com Facebook" e o webhook
+# de Lead Ads (state assinado / assinatura do App Secret) ---
+app.include_router(meta_router.public_router)
 # --- publico: a tag do site e o coletor de eventos da jornada (/t/*) ---
 app.include_router(collect_router.router)
 

@@ -1,15 +1,28 @@
 import { useState } from 'react'
 
+import { authApi } from './api'
 import { useAuth } from './authContext'
-import { Logo } from './icons'
+import { IconFacebook, Logo } from './icons'
 import { Banner, Button, Field, Input } from './ui'
 
 /** Porta de entrada do painel. Sem sessão válida, é a única tela que existe. */
 export default function Login() {
-  const { login } = useAuth()
+  const { login, facebookError } = useAuth()
   const [form, setForm] = useState({ username: '', password: '' })
   const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(facebookError)
+
+  // sai pro Facebook; a volta cai no callback do backend e de lá no painel já logado
+  const withFacebook = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      window.location.href = (await authApi.facebookStart()).url
+    } catch (e) {
+      setErr((e as Error).message)
+      setBusy(false)
+    }
+  }
 
   const submit = async () => {
     setBusy(true)
@@ -79,10 +92,23 @@ export default function Login() {
           >
             {busy ? 'entrando…' : 'Entrar'}
           </Button>
+
+          <div className="flex items-center gap-3 text-[11px] text-ink-500">
+            <span className="h-px flex-1 bg-ink-800" />
+            ou
+            <span className="h-px flex-1 bg-ink-800" />
+          </div>
+
+          <Button full disabled={busy} onClick={() => void withFacebook()}>
+            <IconFacebook className="h-4 w-4 text-[#1877F2]" />
+            Entrar com Facebook
+          </Button>
         </form>
 
         <p className="mt-5 text-center text-[11px] leading-relaxed text-ink-500">
           Esqueceu a senha? Peça a um administrador para redefinir em Admin → Usuários.
+          <br />
+          Para entrar com Facebook, vincule antes em Minha conta → Vincular Facebook.
         </p>
       </div>
     </div>

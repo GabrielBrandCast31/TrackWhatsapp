@@ -39,6 +39,8 @@ export interface LeadFormSettings {
   redirect_url: string
   redirect_delay: number
   webhook_url: string
+  /** código de Test Events do Meta: preenchido, a CAPI envia o Lead como teste */
+  meta_test_event_code: string
   /** ao terminar, abre o WhatsApp da linha com a mensagem pronta e o TL_ID */
   whatsapp_redirect: boolean
   whatsapp_phone: string

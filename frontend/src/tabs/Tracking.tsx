@@ -11,6 +11,7 @@ import {
   type SimulationResult,
 } from '../api'
 import { useNumber } from '../numberContext'
+import MetaConnect from './MetaConnect'
 import {
   Badge,
   Banner,
@@ -618,6 +619,8 @@ export default function Tracking({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="space-y-5">
       {err && <Banner tone="bad">{err}</Banner>}
+
+      <MetaConnect instance={current} onSaved={refresh} />
 
       <MetaDestination instance={current} onSaved={refresh} />
 

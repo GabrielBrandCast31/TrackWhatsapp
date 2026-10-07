@@ -34,6 +34,7 @@ def serialize(user: User) -> dict:
         "active": user.active,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
+        "facebook_linked": bool(user.facebook_id),
     }
 
 

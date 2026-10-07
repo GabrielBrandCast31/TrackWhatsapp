@@ -424,6 +424,40 @@ O evento sai assim:
 O `ctwa_clid` vai **em claro** (é assim que o Meta espera); telefone e e-mail vão em
 SHA-256.
 
+## Conexão com o Facebook (OAuth)
+
+Em vez de colar Pixel e tokens, cada linha pode **conectar o Facebook**: aba
+**Rastreamento** → *Conexão com o Facebook* → **Conectar com Facebook**. Depois de
+autorizar, escolha a conta de anúncios, o Pixel e a Página.
+
+| Escolha | Vira |
+|---|---|
+| Conta de anúncios | `meta_ads_token` da linha (nome de campanha e objetivo no CRM) |
+| Pixel | `meta_dataset_id` + `meta_capi_token` da linha. Um token **colado à mão** (usuário do sistema) é mantido: ele não expira e tem prioridade |
+| Página | inscrição do app no webhook `leadgen`: cada lead do formulário nativo (Lead Ads) vira conversa no CRM da linha, com o anúncio em `source_id`. O botão **Importar leads** relê os formulários da Página |
+
+O token de usuário dura ~60 dias; o card avisa 7 dias antes e o botão **Reconectar**
+renova sem perder o que foi escolhido. Desconectar tira da linha só os tokens que
+vieram da conexão.
+
+**Entrar com Facebook.** Cada usuário vincula o próprio Facebook em *Minha conta →
+Vincular Facebook*; depois disso o botão da tela de login funciona para ele. O login
+nunca cria usuário: Facebook sem vínculo é recusado.
+
+### Configurar o app na Meta
+
+1. developers.facebook.com → **Criar app** → tipo *Empresa*, ligado ao seu Business Manager.
+2. Produto **Login do Facebook para Empresas** → em *URIs de redirecionamento do OAuth
+   válidos*, cadastre `<PUBLIC_BASE_URL>/api/meta/oauth/callback` (exige https fora do localhost).
+3. *Configurações → Básico* → copie ID e Chave secreta para `META_APP_ID` e `META_APP_SECRET`.
+4. Lead Ads em tempo real: produto **Webhooks** → objeto *Page* → campo `leadgen`, URL
+   `<PUBLIC_BASE_URL>/webhook/meta` e o texto de `META_WEBHOOK_VERIFY_TOKEN`.
+5. Para conectar contas de **outras pessoas** (clientes fora do seu Business Manager), o app
+   precisa de *Acesso avançado* às permissões na Análise do app: `ads_read`, `ads_management`,
+   `business_management`, `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`,
+   `pages_manage_ads` e `leads_retrieval`. Em modo de desenvolvimento só funciona para quem
+   tem função no app.
+
 ## Eventos por palavra-chave
 
 Aba **Rastreamento** → *Eventos de conversão por palavra-chave*. Cada regra tem:

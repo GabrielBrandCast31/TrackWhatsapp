@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { authApi, session } from './api'
+import { authApi, metaApi, session } from './api'
 import { useAuth } from './authContext'
-import { IconChevronDown, IconKey, IconLogout } from './icons'
+import { IconChevronDown, IconFacebook, IconKey, IconLogout } from './icons'
+import { takeReturn } from './oauthReturn'
 import { Banner, Button, Field, Input } from './ui'
 
 /** Trocar a própria senha. Vale pra qualquer perfil — quem não é admin não tem
@@ -102,11 +103,45 @@ function initials(name: string) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
+type Notice = { tone: 'good' | 'bad'; text: string }
+
+/** Volta do "Vincular Facebook": o menu abre já com o resultado. Lido no módulo,
+ *  não no useState — o StrictMode chama o inicializador duas vezes. */
+let linkReturn: Notice | null = (() => {
+  const linked = takeReturn('fb_linked')
+  if (linked) return { tone: 'good', text: `Facebook vinculado (${linked}). Agora dá pra entrar com ele.` }
+  const error = takeReturn('link_error')
+  return error ? { tone: 'bad', text: error } : null
+})()
+
 /** Quem está logado, no canto do cabeçalho: avatar com menu de conta. */
 export default function AccountBar() {
-  const { user, isAdmin, logout } = useAuth()
+  const { user, isAdmin, logout, setUser } = useAuth()
   const [dialog, setDialog] = useState(false)
-  const [open, setOpen] = useState(false)
+  const [notice, setNotice] = useState<Notice | null>(() => linkReturn)
+  const [open, setOpen] = useState(() => linkReturn !== null)
+  // aparece uma vez: sair e entrar de novo não repete o aviso
+  useEffect(() => {
+    linkReturn = null
+  }, [])
+  const [fbBusy, setFbBusy] = useState(false)
+
+  const toggleFacebook = async () => {
+    setFbBusy(true)
+    setNotice(null)
+    try {
+      if (user?.facebook_linked) {
+        setUser(await metaApi.unlink())
+        setNotice({ tone: 'good', text: 'Facebook desvinculado.' })
+      } else {
+        window.location.href = (await metaApi.start('link')).url
+        return
+      }
+    } catch (e) {
+      setNotice({ tone: 'bad', text: (e as Error).message })
+    }
+    setFbBusy(false)
+  }
   const box = useRef<HTMLDivElement>(null)
 
   // clique fora ou Esc fecham o menu — senão ele fica pendurado na tela
@@ -174,6 +209,25 @@ export default function AccountBar() {
               <IconKey className="h-4 w-4" />
               Trocar senha
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={fbBusy}
+              onClick={() => void toggleFacebook()}
+              className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-ink-300 transition-colors hover:bg-ink-850 hover:text-ink-100 disabled:opacity-50"
+            >
+              <IconFacebook className="h-4 w-4 text-[#1877F2]" />
+              {user.facebook_linked ? 'Desvincular Facebook' : 'Vincular Facebook'}
+            </button>
+            {notice && (
+              <p
+                className={`px-4 pb-2.5 text-[11px] leading-snug ${
+                  notice.tone === 'good' ? 'text-wa-500' : 'text-red-300'
+                }`}
+              >
+                {notice.text}
+              </p>
+            )}
             <button
               type="button"
               role="menuitem"

@@ -78,7 +78,13 @@ _COLUMNS: dict[str, dict[str, str]] = {
     # de onde veio o evento: botao, regra de palavra-chave ou primeiro contato
     "conversions": {"source": "VARCHAR(16)", "rule_id": "INTEGER"},
     # login do painel: base que ja existia ganha a tabela nova pelo create_all
-    "users": {"name": "VARCHAR(120)", "last_login_at": "TIMESTAMP", "password_changed_at": "TIMESTAMP"},
+    "users": {
+        "name": "VARCHAR(120)",
+        "last_login_at": "TIMESTAMP",
+        "password_changed_at": "TIMESTAMP",
+        # "Entrar com Facebook": id vinculado pelo proprio usuario
+        "facebook_id": "VARCHAR(64)",
+    },
 }
 
 # coluna nova com valor obrigatorio: ALTER TABLE cria com NULL, e o backfill
@@ -177,8 +183,22 @@ def _rename_stages(conn) -> None:
         )
 
 
+def _user_facebook_index(conn) -> None:
+    """O ALTER TABLE cria a coluna sem o indice unico que o modelo declara.
+
+    Unico de verdade: dois usuarios com o mesmo Facebook fariam o login cair no
+    primeiro que o banco devolvesse. NULL repetido continua permitido.
+    """
+    inspector = inspect(conn)
+    if "users" not in set(inspector.get_table_names()):
+        return
+    if "ix_users_facebook_id" not in {i["name"] for i in inspector.get_indexes("users")}:
+        conn.execute(text("CREATE UNIQUE INDEX ix_users_facebook_id ON users (facebook_id)"))
+
+
 def upgrade(conn) -> None:
     _add_missing_columns(conn)
+    _user_facebook_index(conn)
     _rename_stages(conn)
     _contact_journey_index(conn)
     _relax_unique_indexes(conn)

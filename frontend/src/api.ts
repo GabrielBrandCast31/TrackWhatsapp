@@ -21,6 +21,8 @@ export type AuthUser = {
   last_login_at: string | null
   /** linhas (clientes) que o usuário de operação enxerga; admin vê todas */
   number_ids?: number[]
+  /** vinculou o Facebook: pode usar "Entrar com Facebook" */
+  facebook_linked?: boolean
 }
 
 export type TokenPair = {
@@ -981,6 +983,83 @@ export const authApi = {
   patchUser: (id: number, patch: Record<string, unknown>) =>
     request<AuthUser>(`/api/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteUser: (id: number) => request<void>(`/api/auth/users/${id}`, { method: 'DELETE' }),
+  /** URL do diálogo do Facebook para entrar (público: sem sessão ainda) */
+  facebookStart: () => request<{ url: string }>('/api/meta/login/start', { method: 'POST' }),
+  /** troca o token curto que voltou no fragmento pela sessão normal */
+  facebookExchange: (token: string) =>
+    request<TokenPair>('/api/meta/login/exchange', { method: 'POST', body: JSON.stringify({ token }) }),
+}
+
+// --- conexão com o Facebook (OAuth) ---
+
+export type MetaStatus = {
+  configured: boolean
+  redirect_uri: string
+  webhook_url: string
+  webhook_ready: boolean
+  scopes: string[]
+}
+
+export type MetaConnection = {
+  fb_user_id: string
+  fb_user_name: string | null
+  expires_at: string | null
+  expired: boolean
+  scopes: string[]
+  missing_scopes: string[]
+  ad_account_id: string | null
+  ad_account_name: string | null
+  pixel_id: string | null
+  pixel_name: string | null
+  page_id: string | null
+  page_name: string | null
+  leads_subscribed: boolean
+  last_error: string | null
+  leads: number
+  updated_at: string
+}
+
+export type MetaAdAccount = { id: string; name: string; business: string | null; active: boolean }
+export type MetaPixel = { id: string; name: string; last_fired_time: string | null }
+export type MetaPage = { id: string; name: string; tasks: string[] }
+
+export type MetaLead = {
+  id: number
+  leadgen_id: string
+  form_name: string | null
+  ad_name: string | null
+  campaign_name: string | null
+  platform: string | null
+  answers: Record<string, string>
+  contact_id: number | null
+  created_at: string
+}
+
+export const metaApi = {
+  status: () => request<MetaStatus>('/api/meta/status'),
+  start: (purpose: 'connect' | 'link', numberId?: number, rerequest = false) =>
+    request<{ url: string }>('/api/meta/oauth/start', {
+      method: 'POST',
+      body: JSON.stringify({ purpose, number_id: numberId, rerequest }),
+    }),
+  unlink: () => request<AuthUser>('/api/meta/link', { method: 'DELETE' }),
+  line: (numberId: number) => request<{ connection: MetaConnection | null }>(`/api/meta/lines/${numberId}`),
+  assets: (numberId: number) =>
+    request<{ ad_accounts: MetaAdAccount[]; pages: MetaPage[] }>(`/api/meta/lines/${numberId}/assets`),
+  pixels: (numberId: number, adAccountId: string) =>
+    request<{ pixels: MetaPixel[] }>(`/api/meta/lines/${numberId}/pixels${qs({ ad_account_id: adAccountId })}`),
+  select: (numberId: number, payload: { ad_account_id?: string; pixel_id?: string; page_id?: string }) =>
+    request<{ connection: MetaConnection; applied: string[] }>(`/api/meta/lines/${numberId}/select`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  disconnect: (numberId: number) =>
+    request<{ connection: null }>(`/api/meta/lines/${numberId}`, { method: 'DELETE' }),
+  syncLeads: (numberId: number) =>
+    request<{ forms: number; seen: number; new: number }>(`/api/meta/lines/${numberId}/leads/sync`, {
+      method: 'POST',
+    }),
+  leads: (numberId: number) => request<MetaLead[]>(`/api/meta/lines/${numberId}/leads`),
 }
 
 export const api = {

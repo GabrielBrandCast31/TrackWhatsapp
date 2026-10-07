@@ -1,6 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
+// primeiro: lê a volta do Facebook antes de os contextos lerem o localStorage
+import './oauthReturn'
+
 import App from './App'
 import PublicForm from './forms/PublicForm'
 import './index.css'

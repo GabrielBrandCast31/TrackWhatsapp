@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -702,7 +702,71 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(16), default="user")  # admin | user
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # id do Facebook (escopado pelo app) vinculado pelo proprio usuario logado.
+    # So quem vinculou entra com "Entrar com Facebook" — o login nunca cria conta.
+    facebook_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MetaConnection(Base):
+    """Conta do Facebook conectada a uma linha por OAuth (app.routers.meta).
+
+    O token aqui e o de usuario de longa duracao (~60 dias). Pixel e conta de
+    anuncios escolhidos depois do login viram `overrides` da linha, como se
+    tivessem sido colados a mao; a Pagina escolhida recebe a inscricao do app no
+    webhook `leadgen`, e o token da Pagina (que nao expira) busca cada lead.
+    """
+
+    __tablename__ = "meta_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wa_number_id: Mapped[int] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    fb_user_id: Mapped[str] = mapped_column(String(64))
+    fb_user_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    access_token: Mapped[str] = mapped_column(Text)                     # segredo
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+
+    ad_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)   # act_123
+    ad_account_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pixel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pixel_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    page_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    page_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    page_token: Mapped[str | None] = mapped_column(Text, nullable=True)            # segredo
+    leads_subscribed: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    connected_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MetaLead(Base):
+    """Lead de formulario nativo (Lead Ads) recebido de uma Pagina conectada."""
+
+    __tablename__ = "meta_leads"
+    __table_args__ = (UniqueConstraint("leadgen_id", "wa_number_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    leadgen_id: Mapped[str] = mapped_column(String(64), index=True)
+    wa_number_id: Mapped[int] = mapped_column(ForeignKey("wa_numbers.id", ondelete="CASCADE"), index=True)
+    page_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    form_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    form_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    ad_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ad_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    campaign_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    campaign_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    field_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    lead_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

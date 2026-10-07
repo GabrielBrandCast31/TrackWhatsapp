@@ -555,7 +555,7 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
     {
       id: "meta", cat: "integracoes", icon: Crosshair, title: "Rastreamento do Meta",
       desc: "Pixel no navegador e Conversions API no servidor",
-      kw: "pixel meta facebook capi conversions api token evento lead rastreamento",
+      kw: "pixel meta facebook capi conversions api token evento lead rastreamento teste test event code",
       body: (
         <>
           <Field label="Pixel do Meta (ID)" hint="Dispara PageView ao abrir e Lead na conversão.">
@@ -576,6 +576,17 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
               </button>
             </div>
           </Field>
+          <Field label="Código de evento de teste (test_event_code)"
+            hint="Preenchido, o Lead da CAPI aparece em Eventos de teste no Gerenciador de Eventos e não entra na otimização. Apague depois de testar.">
+            <input className={INPUT} value={d.settings.meta_test_event_code} placeholder="TEST12345 (vazio = produção)"
+              autoComplete="off" spellCheck={false}
+              onChange={(e) => setCfg({ meta_test_event_code: e.target.value.replace(/\s/g, "") })} />
+          </Field>
+          {d.settings.meta_test_event_code && (
+            <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-300">
+              Modo teste ligado: os Leads deste formulário vão para Eventos de teste. Lembre de apagar o código antes de rodar campanha.
+            </p>
+          )}
           <p className="rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3 text-xs leading-relaxed text-ink-400">
             O evento vai com o mesmo <code className="font-mono text-wa-500">event_id</code> nos dois canais,
             então o Meta deduplica e não conta a conversão em dobro. O token nunca é exposto na página pública.
