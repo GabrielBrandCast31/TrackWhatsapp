@@ -196,6 +196,32 @@ def _user_facebook_index(conn) -> None:
         conn.execute(text("CREATE UNIQUE INDEX ix_users_facebook_id ON users (facebook_id)"))
 
 
+def _cloud_last_message(conn) -> None:
+    """Conversa da Cloud API gravada antes de a ingestao manter o resumo do CRM.
+
+    Sem `last_message_at` ela iria pro fim da lista, sem previa. Idempotente: so
+    toca quem ainda nao tem o campo e tem mensagem gravada. A Cloud API so entrega
+    o que o cliente manda, entao a ultima mensagem nunca e "minha".
+    """
+    tables = set(inspect(conn).get_table_names())
+    if not {"contacts", "messages", "wa_numbers"} <= tables:
+        return
+    result = conn.execute(
+        text(
+            "UPDATE contacts SET "
+            "last_message_at = (SELECT MAX(m.sent_at) FROM messages m WHERE m.contact_id = contacts.id), "
+            "last_message_body = (SELECT m.body FROM messages m WHERE m.contact_id = contacts.id "
+            "ORDER BY m.sent_at DESC, m.id DESC LIMIT 1), "
+            "last_message_from_me = FALSE "
+            "WHERE last_message_at IS NULL "
+            "AND wa_number_id IN (SELECT id FROM wa_numbers WHERE channel = 'cloud') "
+            "AND EXISTS (SELECT 1 FROM messages m WHERE m.contact_id = contacts.id)"
+        )
+    )
+    if result.rowcount:
+        log.info("migracao: ultima mensagem preenchida em %s conversa(s) da Cloud API", result.rowcount)
+
+
 def upgrade(conn) -> None:
     _add_missing_columns(conn)
     _user_facebook_index(conn)
@@ -203,3 +229,4 @@ def upgrade(conn) -> None:
     _contact_journey_index(conn)
     _relax_unique_indexes(conn)
     _backfill(conn)
+    _cloud_last_message(conn)

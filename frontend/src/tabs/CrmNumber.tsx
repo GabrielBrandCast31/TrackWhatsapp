@@ -1879,3 +1879,24 @@ export default function CrmNumber({ onChanged }: { onChanged: () => void }) {
     </div>
   )
 }
+
+// Peças reaproveitadas pelo CRM da Cloud API (CrmCloud.tsx). Só leitura daqui:
+// o comportamento desta tela não depende de quem mais as usa.
+export {
+  Avatar,
+  CampaignStrip,
+  ChatThread,
+  ContactInfo,
+  ConversationItem,
+  Kanban,
+  Lista,
+  LiveDot,
+  OriginBadge,
+  SourceSelect,
+  matchesSource,
+  phoneLabel,
+  useContactDetail,
+  useCrmLive,
+  useStickToBottom,
+  who,
+}

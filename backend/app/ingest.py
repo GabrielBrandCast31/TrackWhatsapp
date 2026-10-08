@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import numbers, phones
+from app import campaigns, funnel, journey, numbers, phones, settings_store
 from app.models import Contact, Message, Prospect, WaNumber, WebhookLog
 from app.tracking import extract, to_e164
 
@@ -258,6 +258,10 @@ async def ingest_payload(
     log_number_id: int | None = None
     unknown_lines: list[str] = []
     blocked_lines: list[str] = []
+    journeys = 0
+    # anuncios por linha: a campanha e consultada com o token daquela linha
+    ad_ids: dict[int | None, set[str]] = {}
+    lines: dict[int | None, WaNumber | None] = {}
 
     # O log entra antes do processamento pra que cada mensagem possa apontar pro
     # POST que a trouxe (`Message.webhook_log_id`) — e assim a tela mostrar o
@@ -286,6 +290,7 @@ async def ingest_payload(
                 unknown_lines.append(str(phone_number_id))
             wa_number = matched or fallback_number
             wa_number_id = wa_number.id if wa_number else None
+            lines[wa_number_id] = wa_number
             log_phone_number_id = log_phone_number_id or (
                 str(phone_number_id) if phone_number_id else None
             )
@@ -313,6 +318,14 @@ async def ingest_payload(
                 if not contact.first_message and text:
                     contact.first_message = text
 
+                stamp = _ts(message)
+                # jornada do site: o TL_ID (ou protocolo) anexado ao clique liga a
+                # conversa a navegacao — e e dela que vem a UTM de quem chegou pelo site
+                if await journey.attach_journey(session, contact, text, stamp, is_new=created):
+                    journeys += 1
+                if contact.source_id:
+                    ad_ids.setdefault(wa_number_id, set()).add(contact.source_id)
+
                 prospect_id = await link_prospect(session, contact)
                 if prospect_id is not None:
                     prospects_replied.append(prospect_id)
@@ -332,11 +345,24 @@ async def ingest_payload(
                         body=text,
                         raw=message,
                         webhook_log_id=log_entry.id,
-                        sent_at=_ts(message),
+                        sent_at=stamp,
                     )
                 )
                 messages_saved += 1
                 contacts_touched.append(contact.id)
+
+                # --- resumo pro CRM da linha (mesmos campos que a Evolution mantem) ---
+                # A Cloud API so entrega o que o cliente manda: a resposta do
+                # atendente nao volta pelo webhook, entao aqui so ha mensagem "in".
+                current = contact.last_message_at
+                if current is not None and current.tzinfo is None:
+                    current = current.replace(tzinfo=timezone.utc)
+                if current is None or stamp >= current:
+                    contact.last_message_at = stamp
+                    contact.last_message_body = text
+                    contact.last_message_from_me = False
+                contact.unread_count = (contact.unread_count or 0) + 1
+                funnel.on_customer_message(contact, stamp)
 
     summary = (
         f"{messages_saved} msg(s), {new_contacts} contato(s) novo(s), {statuses} status"
@@ -345,6 +371,8 @@ async def ingest_payload(
     )
     if prospects_replied:
         summary += f", {len(set(prospects_replied))} prospect(s) respondeu"
+    if journeys:
+        summary += f", {journeys} lead(s) ligado(s) à jornada do site"
     if blocked_lines:
         summary += f" — {len(blocked_lines)} linha(s) barrada(s) por assinatura: {', '.join(blocked_lines)}"
     if unknown_lines:
@@ -355,6 +383,13 @@ async def ingest_payload(
     log_entry.phone_number_id = log_phone_number_id
     log_entry.wa_number_id = log_number_id
     await session.commit()
+
+    # campanha/objetivo do anuncio: consulta a Marketing API depois do commit,
+    # em segundo plano — o webhook nao espera a Graph API
+    if ad_ids:
+        global_cfg = await settings_store.load(session)
+        for number_id, ids in ad_ids.items():
+            campaigns.schedule_resolve(numbers.effective_cfg(global_cfg, lines.get(number_id)), ids)
 
     return {
         "webhook_log_id": log_entry.id,

@@ -27,6 +27,7 @@ import Atendimento from './tabs/Atendimento'
 import Attribution from './tabs/Attribution'
 import Conversions from './tabs/Conversions'
 import Forms from './tabs/Forms'
+import CrmCloud from './tabs/CrmCloud'
 import CrmNumber from './tabs/CrmNumber'
 import Instances from './tabs/Instances'
 import Journeys from './tabs/Journeys'
@@ -40,6 +41,7 @@ const TABS = [
   { id: 'forms', label: 'Formulários', hint: 'Captação com link próprio', Icon: IconForm },
   { id: 'sitetag', label: 'Tag do site', hint: 'TL_ID, eventos e simulador', Icon: IconCode },
   { id: 'crm', label: 'CRM', hint: 'Conversas com a origem', Icon: IconBoard },
+  { id: 'crmcloud', label: 'CRM Cloud API', hint: 'Conversas da API oficial, com a origem', Icon: IconBoard },
   { id: 'instances', label: 'Conexão', hint: 'Evolution (QR) ou Cloud API', Icon: IconPlug },
   { id: 'tracking', label: 'Rastreamento', hint: 'Pixel, regras e ctwa_clid', Icon: IconRadar },
   { id: 'attribution', label: 'Atribuição', hint: 'Anúncio × conversa', Icon: IconTarget },
@@ -234,6 +236,7 @@ function Shell() {
             {tab === 'tracking' && <Tracking onChanged={refresh} />}
             {tab === 'attribution' && <Attribution />}
             {tab === 'crm' && <CrmNumber onChanged={refresh} />}
+            {tab === 'crmcloud' && <CrmCloud onChanged={refresh} />}
             {tab === 'leads' && <Leads onChanged={refresh} />}
             {tab === 'conversions' && <Conversions onChanged={refresh} />}
             {tab === 'admin' && isAdmin && <Admin onChanged={refresh} />}
