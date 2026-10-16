@@ -217,7 +217,7 @@ export type ContactDetail = Contact & {
 
 export type Dispatch = {
   id: number
-  destination: 'meta_capi' | 'google_ads' | 'webhook'
+  destination: 'meta_capi' | 'meta_capi_page' | 'google_ads' | 'webhook'
   status: 'ok' | 'error' | 'skipped' | 'pending'
   http_status: number | null
   error: string | null
@@ -1109,6 +1109,7 @@ export const api = {
 
 export const DESTINATION_LABEL: Record<string, string> = {
   meta_capi: 'Meta CAPI',
+  meta_capi_page: 'Meta CAPI (Page ID)',
   google_ads: 'Google Ads',
   webhook: 'Webhook',
 }

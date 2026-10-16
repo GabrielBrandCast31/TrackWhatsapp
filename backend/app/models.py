@@ -339,7 +339,7 @@ class Dispatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversion_id: Mapped[int] = mapped_column(ForeignKey("conversions.id", ondelete="CASCADE"), index=True)
-    destination: Mapped[str] = mapped_column(String(32))  # meta_capi | google_ads | webhook
+    destination: Mapped[str] = mapped_column(String(32))  # meta_capi | meta_capi_page | google_ads | webhook
     status: Mapped[str] = mapped_column(String(16), default="pending")  # ok | error | skipped
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     request_payload: Mapped[dict] = mapped_column(JSON, default=dict)

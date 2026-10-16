@@ -200,6 +200,24 @@ async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depe
     except Exception as exc:  # noqa: BLE001
         previews["meta_capi"] = {"error": str(exc)}
 
+    page_id = meta_capi.business_ids(cfg)["page_id"]
+    if page_id:
+        from app.models import AdCampaign
+        from app.services.dispatch import ad_custom_data
+
+        campaign = await session.get(AdCampaign, contact.source_id) if contact.source_id else None
+        previews["meta_capi_page"] = meta_capi.build_page_payload(
+            event_name=event_name,
+            event_id=event_id,
+            ctwa_clid=contact.ctwa_clid,
+            phone=contact.phone_e164 or to_e164(contact.wa_id),
+            page_id=page_id,
+            value=payload.value,
+            currency=currency,
+            test_event_code=(cfg.get("meta_test_event_code") or None) if payload.is_test else None,
+            ad=ad_custom_data(contact, campaign),
+        )
+
     try:
         previews["google_ads"] = google_ads.build_payload(
             cfg,

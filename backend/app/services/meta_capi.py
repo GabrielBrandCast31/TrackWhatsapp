@@ -110,6 +110,68 @@ def build_payload(
     return payload
 
 
+# Nome do evento no formato "page": a lista de eventos da Conversions API for
+# Business Messaging usa `LeadSubmitted` no lugar do `Lead` do pixel.
+PAGE_EVENT_NAMES = {"Lead": "LeadSubmitted"}
+
+
+def build_page_payload(
+    *,
+    event_name: str,
+    event_id: str,
+    ctwa_clid: str | None,
+    phone: str | None,
+    page_id: str | None,
+    email: str | None = None,
+    value: float | None = None,
+    currency: str = "BRL",
+    event_time: int | None = None,
+    test_event_code: str | None = None,
+    ad: dict | None = None,
+) -> dict:
+    """Variante do evento de Click to WhatsApp que vai com `page_id`, sem WABA.
+
+    Corre em paralelo a `build_payload` (destino `meta_capi_page`), nao no lugar
+    dele: e o formato que outra integracao usa e o Meta aceita — `user_data` com
+    `ph` + `page_id` (a Pagina dona do anuncio) + `ctwa_clid`, evento
+    `LeadSubmitted` e os dados do anuncio em `custom_data`. Assim linha sem WABA
+    configurado ainda leva a conversao.
+    """
+    user_data: dict = {}
+    hashed_phone = hash_phone(phone)
+    if hashed_phone:
+        user_data["ph"] = [hashed_phone]
+    hashed_email = hash_email(email)
+    if hashed_email:
+        user_data["em"] = [hashed_email]
+    if page_id:
+        user_data["page_id"] = str(page_id).strip()
+    if ctwa_clid:
+        user_data["ctwa_clid"] = ctwa_clid
+
+    name = PAGE_EVENT_NAMES.get(event_name, event_name)
+    custom_data: dict = {k: v for k, v in (ad or {}).items() if v not in (None, "")}
+    custom_data["status"] = name
+    custom_data["currency"] = currency
+    custom_data["lead_event_source"] = "WhatsApp"
+    if value is not None:
+        custom_data["value"] = value
+
+    event: dict = {
+        "event_name": name,
+        "event_time": event_time or int(time.time()),
+        "event_id": event_id,
+        "action_source": "business_messaging",
+        "messaging_channel": "whatsapp",
+        "user_data": user_data,
+        "custom_data": custom_data,
+    }
+    payload: dict = {"data": [event]}
+    if test_event_code:
+        payload["test_event_code"] = test_event_code
+    return payload
+
+
 def business_ids(cfg: dict) -> dict:
     """`page_id` / `waba_id` da linha, na forma que `build_payload` recebe.
 

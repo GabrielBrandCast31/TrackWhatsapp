@@ -458,6 +458,52 @@ nunca cria usuário: Facebook sem vínculo é recusado.
    `pages_manage_ads` e `leads_retrieval`. Em modo de desenvolvimento só funciona para quem
    tem função no app.
 
+Um app só serve para todas as linhas e todos os clientes: o que muda por linha é a conta de
+anúncios, o Pixel e a Página escolhidos na conexão. `META_APP_ID`, `META_APP_SECRET` e
+`META_WEBHOOK_VERIFY_TOKEN` ficam **só no `.env`** (fora do git), nunca aqui. O backend só lê
+o `.env` ao subir: mudou, reinicie.
+
+### App que já existe: onde achar cada dado
+
+Os nomes dos menus mudam com frequência no painel da Meta; o caminho abaixo é o de referência.
+
+| Dado | Onde fica (developers.facebook.com/apps → o app) |
+|---|---|
+| ID do app (`META_APP_ID`) | topo da página, ao lado do nome; ou *Configurações do app → Básico* |
+| Chave secreta (`META_APP_SECRET`) | *Configurações do app → Básico → Chave secreta → Mostrar* (pede a senha) |
+| Tipo do app | mesma tela; precisa ser **Empresa** para as permissões de anúncio e Lead Ads |
+| URI de redirecionamento | app antigo: *Produtos → Login do Facebook (para Empresas) → Configurações*. App novo: *Casos de uso → Personalizar → Configurações*. Campo *URIs de redirecionamento do OAuth válidos* |
+| Webhook de leads | *Webhooks* → objeto **Page** → URL de callback e campo `leadgen` assinado. O token de verificação não aparece depois de salvo: se esqueceu, gere outro no `.env` e use *Editar assinatura* |
+| Permissões aprovadas | *Análise do app → Permissões e recursos* |
+| Modo (Desenvolvimento / Ao vivo) | botão no topo da página |
+| Quem pode testar | *Funções do app → Funções* |
+
+Com o ngrok, a URI e o webhook usam o domínio do `PUBLIC_BASE_URL` (ex.:
+`https://<dominio-ngrok>/api/meta/oauth/callback` e `https://<dominio-ngrok>/webhook/meta`).
+Ao ir para o domínio definitivo, troque o `PUBLIC_BASE_URL` e recadastre os dois.
+
+### O que dá com o seu acesso e o que depende do cliente
+
+**Só você (dono do app):** ID e chave no `.env`, URI de redirecionamento, webhook `leadgen`,
+pedido de Análise do app, vincular o próprio Facebook para o login.
+
+**Caminho 1, recomendado: o cliente compartilha os ativos com o seu Business Manager.** No BM
+dele: *Configurações do negócio → Parceiros → Adicionar parceiro* → ID do **seu** BM → libera
+a conta de anúncios, o Pixel (conjunto de dados) e a Página (com permissão de **Leads**). Ele
+faz isso uma vez, sem passar senha. Daí em diante você clica **Conectar com Facebook** na linha
+dele com o **seu** Facebook, e os ativos dele já aparecem nas suas listas. Não precisa de
+Análise do app (você tem função no app), e dá para usar um token de usuário do sistema do seu
+BM, que não expira.
+
+**Caminho 2: o cliente conecta com o Facebook dele.** Só funciona se o app passou pela Análise
+do app com Acesso avançado, ou se o cliente for adicionado como testador em *Funções do app*
+(serve para um ou dois, não escala). Quem conecta precisa ser admin da conta de anúncios, do
+Pixel e da Página.
+
+**Sempre depende do cliente:** liberar leads da Página dele (pelo compartilhamento ou pela
+autorização; se a Página tiver uma "Ferramenta de CRM" restringindo leads, ele libera o app
+lá também) e o **WABA ID**, se o WhatsApp Business estiver no BM dele.
+
 ## Eventos por palavra-chave
 
 Aba **Rastreamento** → *Eventos de conversão por palavra-chave*. Cada regra tem:
@@ -615,6 +661,48 @@ Mensagem trazida pelo *puxar histórico* não tem POST — ela foi buscada na Ev
 entregue por ela; nesse caso só o objeto cru existe. O mesmo vale para o que já estava no
 banco antes desta tela. Para o fluxo bruto de tudo que entra, independente de conversa, a
 aba **Conexão** (e a lista de linhas) continua mostrando *Últimos webhooks recebidos*.
+
+## CRM da Cloud API
+
+Aba **CRM Cloud API**, no menu logo abaixo do CRM. É o CRM das linhas conectadas pela API
+oficial da Meta (cadastradas em *Conexão → Cloud API*). Fica separado do CRM da Evolution de
+propósito, porque a Cloud API tem menos recursos. O seletor de linha do topo da tela lista só
+linhas da Evolution, então a aba tem o seu próprio seletor, que lista só linhas Cloud e nunca
+mostra "todas" (isso misturaria as conversas da Evolution).
+
+**O que funciona igual ao CRM da Evolution** (mesmos endpoints e componentes):
+
+- Conversas, Kanban e Lista, com busca, filtros e atualização ao vivo;
+- **de onde veio**: canal (Meta Ads, Google, UTM, orgânico), campanha, ctwa_clid, UTMs, jornada
+  no site e o resumo *Leads por origem*;
+- etapa do funil, nota interna e disparo de conversão pelo objetivo da campanha.
+
+**O que fica de fora:** responder pelo CRM, *puxar histórico* e *Sincronizar* (agenda). A Meta
+só entrega pelo webhook o que o **cliente** manda; a resposta do atendente, enviada pela
+plataforma do número, não volta para cá. A tela avisa isso.
+
+**Como a origem chega.** O webhook da Cloud API (`app/ingest.py`) passou a fazer o mesmo que
+o da Evolution para o CRM, a cada mensagem do cliente:
+
+- preenche a última mensagem, as não lidas e o funil (`last_message_*`, `unread_count`);
+- liga o lead à jornada do site pelo `tl=`/protocolo da mensagem (`journey.attach_journey`).
+  É daí que vem a UTM de quem chegou pelo site;
+- lê o `referral` do anúncio (ctwa_clid) e UTM escrita na própria mensagem;
+- consulta a campanha do anúncio em segundo plano, se a linha tiver token de anúncios.
+
+As conversas que já existiam antes disso ganham a última mensagem na migração de startup
+(`_cloud_last_message` em `app/migrations.py`). A migração é idempotente e só mexe em linhas Cloud.
+
+Teste: `cd backend && ./.venv/bin/python tests/test_cloud_crm.py`.
+
+**Ainda não feito (próximos passos possíveis):**
+
+- regras de palavra-chave e o disparo automático no primeiro contato ainda **não** rodam para
+  mensagens da Cloud API (hoje só na Evolution);
+- responder pelo CRM pela Cloud API, só dentro da janela de 24h da Meta (fora dela, só com
+  template aprovado);
+- a jornada é ligada só nas mensagens novas: lead antigo da Cloud que mandou `tl=` antes desta
+  versão não é religado sozinho.
 
 ## Testar sem gastar clique em anúncio
 

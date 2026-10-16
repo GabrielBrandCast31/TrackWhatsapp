@@ -101,9 +101,11 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
     })
   }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code, instance.meta_page_id, instance.meta_waba_id])
 
-  // evento de WhatsApp e recusado sem o WABA (code 100 / subcode 2804116). Page ID
+  // o evento padrao vai com o WABA (sem ele: code 100 / subcode 2804116). Com Page ID
+  // sai em paralelo o formato `page_id` + ctwa_clid (destino meta_capi_page), que
+  // o Meta aceita sem WABA — qualquer um dos dois deixa a linha pronta.
   // nao serve: e o identificador do Messenger, e a Meta ignora no canal whatsapp.
-  const hasBusinessId = Boolean(instance.meta_waba_id)
+  const hasBusinessId = Boolean(instance.meta_waba_id || instance.meta_page_id)
   const ready = Boolean(instance.meta_dataset_id) && instance.meta_capi_token__set && hasBusinessId
 
   return (
@@ -145,13 +147,22 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
           </Field>
         </div>
 
-        <Field label="WhatsApp Business Account ID (WABA)" hint="Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. É obrigatório no evento do WhatsApp.">
-          <Input
-            value={draft.meta_waba_id}
-            placeholder="109876543210987"
-            onChange={(e) => setDraft({ ...draft, meta_waba_id: e.target.value })}
-          />
-        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="WhatsApp Business Account ID (WABA)" hint="Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. Vai no evento padrão do WhatsApp.">
+            <Input
+              value={draft.meta_waba_id}
+              placeholder="109876543210987"
+              onChange={(e) => setDraft({ ...draft, meta_waba_id: e.target.value })}
+            />
+          </Field>
+          <Field label="Page ID (Página do anúncio)" hint="ID da Página do Facebook que roda o anúncio Click to WhatsApp. Preenchido, cada conversão também sai em paralelo no formato page_id + ctwa_clid (LeadSubmitted), que não depende do WABA.">
+            <Input
+              value={draft.meta_page_id}
+              placeholder="323681427480000"
+              onChange={(e) => setDraft({ ...draft, meta_page_id: e.target.value })}
+            />
+          </Field>
+        </div>
 
         <Field
           label="Token de anúncios (ads_read) — opcional"
@@ -171,11 +182,8 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
 
         {!hasBusinessId && (
           <Banner tone="warn">
-            Sem o WABA ID o Meta recusa o evento do WhatsApp (“não tem page_id nem whatsapp_business_account_id”,
-            code 100 / subcode 2804116).
-            {instance.meta_page_id
-              ? ` O Page ID cadastrado nesta linha (${instance.meta_page_id}) não resolve: no evento de WhatsApp o Meta só aceita o WABA — Page ID é do Messenger.`
-              : ''}
+            Sem WABA ID nem Page ID o Meta recusa o evento do WhatsApp (“não tem page_id nem
+            whatsapp_business_account_id”, code 100 / subcode 2804116). Preencha ao menos um dos dois.
           </Banner>
         )}
 
