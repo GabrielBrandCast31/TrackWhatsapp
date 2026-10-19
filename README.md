@@ -30,6 +30,7 @@ tag do site, Pixel, token e palavras-chave próprios. Um seletor no topo define 
 | **Rastreamento** | Pixel + token da API de Conversões, e as regras de palavra-chave com simulador |
 | **Atribuição** | por que a conversa ainda não vira campanha, o diagnóstico da base e o passo a passo pela Cloud API |
 | **CRM** | as conversas daquele número, em kanban, lista ou caixa de entrada |
+| **Campanhas** | disparo de mensagem de venda para os contatos do CRM da linha: filtro de audiência, teste no seu número, fila com ritmo anti-bloqueio e quem respondeu |
 | **Leads** | quem chegou, com a atribuição extraída; disparo manual quando você quiser |
 | **Conversões** | log de cada evento: payload que saiu, resposta do Meta, retry |
 | **Admin** | prospecção no mapa, CRM, abordagem ativa, Cloud API, destinos extras e usuários (só perfil admin) |
@@ -704,6 +705,50 @@ Teste: `cd backend && ./.venv/bin/python tests/test_cloud_crm.py`.
 - a jornada é ligada só nas mensagens novas: lead antigo da Cloud que mandou `tl=` antes desta
   versão não é religado sozinho.
 
+## Campanhas de disparo (vendas)
+
+Aba **Campanhas** — manda uma mensagem de venda para quem **já está no CRM da linha**.
+Qualquer usuário usa, mas só nas linhas dele.
+
+```
+filtro de audiência ──▶ teste no seu número ──▶ criar ──▶ fila (1 por vez) ──▶ quem respondeu
+etapa · origem ·          texto já preenchido     audiência   intervalo + variação,
+dias sem falar            com variáveis           congelada   janela de horário, cap/dia
+```
+
+**Mensagem.** `{primeiro_nome}`, `{nome}` e `{telefone}` são trocados por contato (nome vazio
+não deixa `Oi , tudo bem?`). `{Oi|Olá|E aí}` é spintax: cada pessoa recebe uma variação —
+texto idêntico em massa é o que mais chama atenção do WhatsApp. *Ver 3 variações* mostra
+como vai chegar; **Enviar teste** manda na hora para o seu número, sem gravar na campanha.
+
+**Audiência.** Etapa do funil, origem do lead (Meta Ads, Google, UTM, orgânico, agenda),
+*sem falar há N dias* (reativação), *falou nos últimos N dias* (lead quente) e *não repetir
+em N dias* (já recebeu outra campanha). Ficam sempre de fora: descadastrados e conversa sem
+destino. A audiência é **congelada** na criação: mexer no CRM depois não muda quem recebe.
+
+**Envio.** Um worker em background envia um por vez, por linha: intervalo mínimo (piso de 5s)
+\+ sorteio de alguns segundos a mais, limite diário por linha (conta as últimas 24h) e janela
+de horário no fuso `BROADCAST_TZ` (padrão `America/Sao_Paulo`). Fora da janela ou no limite,
+a fila espera — não descarta. O texto é sorteado na hora do envio e o request vai pro banco
+antes de sair. Três falhas seguidas **pausam** a campanha (quase sempre é a linha que caiu);
+*Reenviar falhas* devolve pra fila. Backend reiniciado com campanha rodando retoma sozinho.
+
+**Descadastro.** Mensagem do cliente que é só `SAIR`, `PARAR`, `STOP`, `CANCELAR`, `não quero
+mais`… marca `contacts.opted_out_at` e nenhuma campanha inclui de novo. O rodapé *"Responda
+SAIR para não receber mais"* vem ligado por padrão.
+
+**Resultado.** Por campanha: enviadas, na fila, falhas, puladas e **responderam** (o contato
+escreveu depois de receber). No detalhe, cada envio com o texto final, request e response.
+
+**Canal.**
+
+| Linha | Como sai | Observação |
+|---|---|---|
+| Evolution | texto livre | não é API oficial: base fria, ritmo rápido e texto repetido levam a bloqueio do número |
+| Cloud API | template aprovado (categoria Marketing) | oficial, sem risco de ban; a Meta cobra por conversa de marketing |
+
+Teste: `cd backend && ./.venv/bin/python tests/test_broadcasts.py`.
+
 ## Testar sem gastar clique em anúncio
 
 Aba **Leads** → *Simular lead*. Injeta um payload idêntico ao da Evolution, com
@@ -867,6 +912,7 @@ backend/app/
                           require_user / require_admin
   evolution_ingest.py     webhook da Evolution -> lead com atribuição -> regra -> evento
   crm.py                  traz agenda, conversas e histórico da instância pro CRM da linha
+  broadcasts.py           campanhas de disparo: audiência, spintax/variáveis, descadastro e a fila
   ingest.py               mesmo caminho para o payload da Cloud API (canal legado)
   firing.py               criação + envio de um evento: o caminho único de disparo
   campaigns.py            de onde o lead veio: anúncio -> campanha -> objetivo -> evento
@@ -886,6 +932,7 @@ backend/app/
     journeys.py           funil, lista, detalhe, jornada do contato, ligar à mão e simulador
     evolution.py          instâncias: cadastro, QR, webhook, Pixel/token, simulação
     rules.py              regras de palavra-chave + /simulate
+    broadcasts.py         campanhas: audiência, teste, criar/iniciar/pausar/cancelar, detalhe
     crm.py                conversas da linha: etapa, nota, sync, resposta, disparo e o
                           payload cru de uma mensagem (/messages/{id}/payload)
     auth.py               login, refresh, troca de senha e cadastro de usuários
@@ -915,6 +962,7 @@ backend/tests/
   test_forms.py           painel, página pública, resposta -> lead com jornada
   test_attendance.py      funil, tempo de resposta, regra que move etapa e a IA (com dublê)
   test_journey.py         coletor, regra de atribuição e os três métodos de match
+  test_broadcasts.py      texto, audiência, teste, fila, descadastro, respostas e pausa por falha
 ```
 
 ## Notas

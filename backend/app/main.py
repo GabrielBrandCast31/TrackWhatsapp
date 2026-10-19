@@ -39,6 +39,7 @@ from app.db import SessionLocal, init_db
 from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect, TrackingEvent
 from app.routers import attendance as attendance_router
 from app.routers import auth as auth_router
+from app.routers import broadcasts as broadcasts_router
 from app.routers import collect as collect_router
 from app.routers import config as config_router
 from app.routers import contacts as contacts_router
@@ -83,6 +84,7 @@ app.include_router(attendance_router.router, dependencies=_logged_in)
 app.include_router(evolution_router.router, dependencies=_logged_in)
 app.include_router(rules_router.router, dependencies=_logged_in)
 app.include_router(crm_router.router, dependencies=_logged_in)
+app.include_router(broadcasts_router.router, dependencies=_logged_in)
 app.include_router(contacts_router.router, dependencies=_logged_in)
 app.include_router(conversions_router.router, dependencies=_logged_in)
 # conexao com o Facebook por OAuth, por linha (o router confere o acesso a linha)
@@ -132,6 +134,10 @@ async def on_startup() -> None:
     if pending:
         logging.getLogger(__name__).info("retomando %s abordagem(ns) na fila", pending)
         prospecting_router.start_queue_worker()
+    # campanha de disparo que estava rodando no restart continua de onde parou
+    from app import broadcasts
+
+    await broadcasts.resume_pending()
     # estado das linhas por conta propria: sem isso a tela so descobre que uma
     # sessao caiu se um webhook chegar — e webhook nenhum chega justamente quando
     # ela cai. Guardado no app pra nao virar task orfa no shutdown.

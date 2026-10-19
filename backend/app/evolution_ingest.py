@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import campaigns, funnel, journey
+from app import broadcasts, campaigns, funnel, journey
 from app import numbers as numbers_service
 from app import settings_store
 from app.firing import already_fired, fire_event
@@ -457,6 +457,8 @@ async def ingest_event(session: AsyncSession, payload: dict, number: WaNumber) -
 
             if not from_me and not contact.first_message and text:
                 contact.first_message = text
+            if not from_me and broadcasts.register_opt_out(contact, text):
+                result["opted_out"] = result.get("opted_out", 0) + 1
 
             if not from_me:
                 # jornada do site: o TL_ID (ou protocolo) anexado ao clique no

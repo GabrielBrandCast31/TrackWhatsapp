@@ -8,6 +8,7 @@ import {
   IconCode,
   IconForm,
   IconFunnel,
+  IconMegaphone,
   IconMenu,
   IconPlug,
   IconRadar,
@@ -25,6 +26,7 @@ import Sidebar from './Sidebar'
 import Admin from './tabs/Admin'
 import Atendimento from './tabs/Atendimento'
 import Attribution from './tabs/Attribution'
+import Campaigns from './tabs/Campaigns'
 import Conversions from './tabs/Conversions'
 import Forms from './tabs/Forms'
 import CrmCloud from './tabs/CrmCloud'
@@ -41,6 +43,7 @@ const TABS = [
   { id: 'forms', label: 'Formulários', hint: 'Captação com link próprio', Icon: IconForm },
   { id: 'sitetag', label: 'Tag do site', hint: 'TL_ID, eventos e simulador', Icon: IconCode },
   { id: 'crm', label: 'CRM', hint: 'Conversas com a origem', Icon: IconBoard },
+  { id: 'campaigns', label: 'Campanhas', hint: 'Disparo de vendas no WhatsApp', Icon: IconMegaphone },
   { id: 'crmcloud', label: 'CRM Cloud API', hint: 'Conversas da API oficial, com a origem', Icon: IconBoard },
   { id: 'instances', label: 'Conexão', hint: 'Evolution (QR) ou Cloud API', Icon: IconPlug },
   { id: 'tracking', label: 'Rastreamento', hint: 'Pixel, regras e ctwa_clid', Icon: IconRadar },
@@ -237,6 +240,7 @@ function Shell() {
             {tab === 'attribution' && <Attribution />}
             {tab === 'crm' && <CrmNumber onChanged={refresh} />}
             {tab === 'crmcloud' && <CrmCloud onChanged={refresh} />}
+            {tab === 'campaigns' && <Campaigns />}
             {tab === 'leads' && <Leads onChanged={refresh} />}
             {tab === 'conversions' && <Conversions onChanged={refresh} />}
             {tab === 'admin' && isAdmin && <Admin onChanged={refresh} />}

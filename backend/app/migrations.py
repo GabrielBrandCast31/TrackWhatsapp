@@ -55,6 +55,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "stage_source": "VARCHAR(8)",
         "first_response_at": "TIMESTAMP",
         "customer_replied_at": "TIMESTAMP",
+        # descadastro das campanhas de disparo
+        "opted_out_at": "TIMESTAMP",
     },
     "keyword_rules": {"set_stage": "VARCHAR(16)"},
     # ponteiro da mensagem pro POST de webhook que a trouxe (ver o payload cru)

@@ -167,6 +167,8 @@ class Contact(Base):
     first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     customer_replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # pediu pra nao receber campanha ("SAIR"). Campanha nenhuma inclui quem tem isso.
+    opted_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # webhook = falou com a gente depois de conectar; sync = veio do historico da
     # instancia; simulado = criado pelo simulador da tela.
     origin: Mapped[str] = mapped_column(String(16), default="webhook")
@@ -579,6 +581,78 @@ class Outreach(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     prospect: Mapped["Prospect"] = relationship(back_populates="outreaches")
+
+
+BROADCAST_STATUSES = ("draft", "running", "paused", "done", "canceled")
+
+
+class Broadcast(Base):
+    """Campanha de disparo para os contatos do CRM de uma linha.
+
+    A audiencia e congelada na criacao (`BroadcastRecipient`): mexer no CRM depois
+    nao muda quem recebe, e o progresso tem um denominador fixo.
+    """
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(16), default="text")  # text | template
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    template_language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    template_params: Mapped[list] = mapped_column(JSON, default=list)
+    # o filtro que gerou a audiencia, so pra mostrar depois de onde ela saiu
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    # intervalo entre envios: minimo + sorteio de ate `jitter` segundos a mais.
+    # Ritmo fixo de robo e o que mais chama atencao do WhatsApp.
+    throttle_seconds: Mapped[int] = mapped_column(Integer, default=20)
+    jitter_seconds: Mapped[int] = mapped_column(Integer, default=15)
+    daily_cap: Mapped[int] = mapped_column(Integer, default=200)
+    # janela de envio no fuso local (BROADCAST_TZ): fora dela a fila espera.
+    window_start_hour: Mapped[int] = mapped_column(Integer, default=8)
+    window_end_hour: Mapped[int] = mapped_column(Integer, default=20)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    # por que parou sozinha (ex.: falhas seguidas = linha desconectada)
+    pause_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    recipients: Mapped[list["BroadcastRecipient"]] = relationship(
+        back_populates="broadcast", cascade="all, delete-orphan"
+    )
+
+
+class BroadcastRecipient(Base):
+    """Um destinatario da campanha, com o texto final e o request/response crus."""
+
+    __tablename__ = "broadcast_recipients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    broadcast_id: Mapped[int] = mapped_column(ForeignKey("broadcasts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    wa_number_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    to: Mapped[str] = mapped_column(String(64))
+    # queued -> sent | failed | skipped (descadastrou, cap do dia, campanha cancelada)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wamid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    response_body: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    broadcast: Mapped["Broadcast"] = relationship(back_populates="recipients")
 
 
 class LeadForm(Base):

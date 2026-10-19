@@ -787,6 +787,117 @@ export const crmApi = {
     }),
 }
 
+// --- campanhas de disparo: mensagem de venda para os contatos do CRM ---
+
+export type BroadcastStatus = 'draft' | 'running' | 'paused' | 'done' | 'canceled'
+
+export type AudienceFilters = {
+  stages?: string[]
+  channels?: string[]
+  source_keys?: string[]
+  inactive_days?: number
+  active_days?: number
+  exclude_recent_days?: number
+  contact_ids?: number[]
+  q?: string
+}
+
+export type AudiencePreview = {
+  count: number
+  dropped: { opted_out: number; no_destination: number; recent: number; filtered: number }
+  sample: { id: number; name: string | null; wa_id: string; phone_e164: string | null; stage: string }[]
+  sent_last_24h: number
+}
+
+export type BroadcastStats = {
+  total: number
+  queued: number
+  sent: number
+  failed: number
+  skipped: number
+  replied: number
+}
+
+export type Broadcast = {
+  id: number
+  wa_number_id: number | null
+  name: string
+  kind: 'text' | 'template'
+  text: string | null
+  template_name: string | null
+  template_language: string | null
+  template_params: string[]
+  filters: AudienceFilters
+  throttle_seconds: number
+  jitter_seconds: number
+  daily_cap: number
+  window_start_hour: number
+  window_end_hour: number
+  status: BroadcastStatus
+  pause_reason: string | null
+  created_by: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  stats: BroadcastStats
+}
+
+export type BroadcastRecipient = {
+  id: number
+  contact_id: number | null
+  name: string | null
+  to: string
+  status: 'queued' | 'sent' | 'failed' | 'skipped'
+  body: string | null
+  error: string | null
+  http_status: number | null
+  wamid: string | null
+  sent_at: string | null
+  replied: boolean
+  request_payload: Record<string, unknown>
+  response_body: Record<string, unknown>
+}
+
+export type BroadcastDetail = Broadcast & { recipients: BroadcastRecipient[] }
+
+export type BroadcastMessage = {
+  kind: 'text' | 'template'
+  text?: string
+  opt_out_footer?: boolean
+  template_name?: string
+  template_language?: string
+  template_params?: string[]
+}
+
+export const broadcastApi = {
+  list: (numberId?: number) => request<Broadcast[]>(`/api/broadcasts${qs({ number_id: numberId })}`),
+  templates: (numberId: number) => request<WaTemplate[]>(`/api/broadcasts/templates${qs({ number_id: numberId })}`),
+  get: (id: number, status?: string) => request<BroadcastDetail>(`/api/broadcasts/${id}${qs({ status })}`),
+  audience: (numberId: number, filters: AudienceFilters) =>
+    request<AudiencePreview>(`/api/broadcasts/audience${qs({ number_id: numberId })}`, {
+      method: 'POST',
+      body: JSON.stringify(filters),
+    }),
+  preview: (message: BroadcastMessage, sampleName?: string) =>
+    request<{ variations: string[] }>(`/api/broadcasts/preview${qs({ sample_name: sampleName })}`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }),
+  test: (payload: BroadcastMessage & { number_id: number; phone: string; sample_name?: string }) =>
+    request<{ sent: boolean; to: string; body: string; wamid: string | null }>('/api/broadcasts/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  create: (payload: Record<string, unknown>) =>
+    request<Broadcast>('/api/broadcasts', { method: 'POST', body: JSON.stringify(payload) }),
+  start: (id: number) => request<Broadcast>(`/api/broadcasts/${id}/start`, { method: 'POST' }),
+  pause: (id: number) => request<Broadcast>(`/api/broadcasts/${id}/pause`, { method: 'POST' }),
+  cancel: (id: number) => request<Broadcast>(`/api/broadcasts/${id}/cancel`, { method: 'POST' }),
+  retryFailed: (id: number) =>
+    request<Broadcast & { requeued: number }>(`/api/broadcasts/${id}/retry-failed`, { method: 'POST' }),
+  remove: (id: number) => request<void>(`/api/broadcasts/${id}`, { method: 'DELETE' }),
+}
+
 // --- instâncias da Evolution API (a "linha" da tela principal) ---
 
 export type EvoInstance = {

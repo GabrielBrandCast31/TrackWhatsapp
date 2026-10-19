@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import campaigns, funnel, journey, numbers, phones, settings_store
+from app import broadcasts, campaigns, funnel, journey, numbers, phones, settings_store
 from app.models import Contact, Message, Prospect, WaNumber, WebhookLog
 from app.tracking import extract, to_e164
 
@@ -317,6 +317,7 @@ async def ingest_payload(
 
                 if not contact.first_message and text:
                     contact.first_message = text
+                broadcasts.register_opt_out(contact, text)
 
                 stamp = _ts(message)
                 # jornada do site: o TL_ID (ou protocolo) anexado ao clique liga a
