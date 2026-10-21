@@ -25,7 +25,17 @@ const META: FieldDef[] = [
   {
     key: 'meta_waba_id',
     label: 'WhatsApp Business Account ID (WABA)',
-    hint: 'Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. É obrigatório no evento do WhatsApp.',
+    hint: 'Opcional — basta ele, o Page ID ou o ID do Instagram. Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta.',
+  },
+  {
+    key: 'meta_page_id',
+    label: 'Page ID do Facebook',
+    hint: 'Opcional — Página que roda o anúncio Click to WhatsApp. O ctwa_clid precisa ter sido gerado por ela.',
+  },
+  {
+    key: 'meta_instagram_id',
+    label: 'ID do Instagram',
+    hint: 'Opcional — conta do Instagram que roda o anúncio. Vai no lugar do Page ID em lead que veio do Instagram.',
   },
 ]
 

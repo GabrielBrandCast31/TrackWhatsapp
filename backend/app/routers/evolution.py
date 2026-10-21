@@ -44,6 +44,7 @@ META_FIELDS = (
     "meta_capi_token",
     "meta_test_event_code",
     "meta_page_id",
+    "meta_instagram_id",
     "meta_waba_id",
     "meta_ads_token",
 )
@@ -97,6 +98,7 @@ def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = N
         "meta_dataset_id": overrides.get("meta_dataset_id") or "",
         "meta_test_event_code": overrides.get("meta_test_event_code") or "",
         "meta_page_id": overrides.get("meta_page_id") or "",
+        "meta_instagram_id": overrides.get("meta_instagram_id") or "",
         "meta_waba_id": overrides.get("meta_waba_id") or "",
         "meta_capi_token__set": bool(token),
         "meta_capi_token__hint": f"...{token[-4:]}" if len(token) >= 4 else "",
@@ -118,6 +120,7 @@ class InstanceIn(BaseModel):
     meta_capi_token: str | None = None
     meta_test_event_code: str | None = None
     meta_page_id: str | None = None
+    meta_instagram_id: str | None = None
     meta_waba_id: str | None = None
     meta_ads_token: str | None = None
     objective_events: dict[str, str] | None = None
@@ -138,6 +141,7 @@ class InstancePatch(BaseModel):
     meta_capi_token: str | None = None
     meta_test_event_code: str | None = None
     meta_page_id: str | None = None
+    meta_instagram_id: str | None = None
     meta_waba_id: str | None = None
     meta_ads_token: str | None = None
     objective_events: dict[str, str] | None = None

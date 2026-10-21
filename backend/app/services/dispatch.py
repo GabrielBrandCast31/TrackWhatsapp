@@ -6,8 +6,8 @@ Um destino que falha nao derruba os outros.
 
 `meta_capi_page` e o evento do Meta no formato com `page_id` (sem WABA). Ele nao
 e um destino que se liga sozinho: vai junto, em paralelo, sempre que `meta_capi`
-sai e a linha tem Page ID — se um dos dois formatos for recusado, o outro ainda
-leva a conversao.
+sai e a linha tem Page ID ou ID do Instagram — se um dos dois formatos for
+recusado, o outro ainda leva a conversao. Sem WABA, so ele sai.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,14 +31,24 @@ def enabled_destinations(cfg: dict) -> list[str]:
 
 
 def _with_parallel(cfg: dict, targets: list[str]) -> list[str]:
-    """Poe `meta_capi_page` logo depois de `meta_capi` quando a linha tem Page ID."""
-    if "meta_capi" not in targets or "meta_capi_page" in targets:
+    """Escolhe os formatos do Meta pelo que a linha tem: WABA, Page ID, Instagram.
+
+    Qualquer um basta. Com WABA e Page/Instagram, sai `meta_capi_page` logo depois
+    de `meta_capi`; sem WABA, o `meta_capi_page` entra no lugar do `meta_capi`.
+    """
+    if "meta_capi" not in targets:
         return list(targets)
-    if not meta_capi.business_ids(cfg)["page_id"]:
+    has_page = bool(meta_capi.page_id_for(cfg))
+    if not has_page:
         return list(targets)
     out = list(targets)
-    out.insert(out.index("meta_capi") + 1, "meta_capi_page")
-    return out
+    i = out.index("meta_capi")
+    if not meta_capi.business_ids(cfg)["waba_id"]:
+        out[i] = "meta_capi_page"
+    elif "meta_capi_page" not in out:
+        out.insert(i + 1, "meta_capi_page")
+    # sem duplicar quando o meta_capi_page ja estava na lista
+    return list(dict.fromkeys(out))
 
 
 def _sanitize(payload: dict) -> dict:
@@ -72,12 +82,9 @@ def _check_meta(cfg: dict, payload: dict) -> None:
             "Use um lead vindo de anuncio Click to WhatsApp (ou o simulador)."
         )
     if not user_data.get("whatsapp_business_account_id"):
-        has_page = bool(meta_capi.business_ids(cfg)["page_id"])
         raise meta_capi.CapiError(
-            "Linha sem WhatsApp Business Account ID (WABA) — o Meta exige ele em evento do WhatsApp"
-            + (" (o Page ID preenchido não serve: ele é do Messenger)" if has_page else "")
-            + ". Pegue em Business Manager > Configurações do negócio > Contas > Contas do WhatsApp "
-            "e preencha em Rastreamento > Meta."
+            "Linha sem WhatsApp Business Account ID (WABA) — esse formato do evento precisa dele. "
+            "Preencha em Rastreamento > Meta o WABA, o Page ID ou o ID do Instagram (basta um)."
         )
 
 
@@ -102,9 +109,12 @@ def ad_custom_data(contact: Contact, campaign: AdCampaign | None) -> dict:
 
 
 def _build_meta_page(cfg: dict, contact: Contact, conv: Conversion, campaign: AdCampaign | None = None) -> dict:
-    page_id = meta_capi.business_ids(cfg)["page_id"]
+    page_id = meta_capi.page_id_for(cfg, contact.ad_source_app)
     if not page_id:
-        raise meta_capi.CapiError("Linha sem Page ID — o formato paralelo do Meta precisa dele (Rastreamento > Meta).")
+        raise meta_capi.CapiError(
+            "Linha sem Page ID nem ID do Instagram — o formato page_id do Meta precisa de um deles "
+            "(Rastreamento > Meta)."
+        )
     if not contact.ctwa_clid:
         raise meta_capi.CapiError(
             "Contato sem ctwa_clid — o Meta nao consegue atribuir esse evento a uma campanha. "

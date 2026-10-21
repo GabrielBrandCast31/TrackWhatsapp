@@ -52,6 +52,7 @@ OVERRIDABLE = (
     "meta_capi_token",
     "meta_test_event_code",
     "meta_page_id",
+    "meta_instagram_id",
     "meta_waba_id",
     "meta_ads_token",
     "objective_events",

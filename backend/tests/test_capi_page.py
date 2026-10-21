@@ -50,11 +50,24 @@ check("mesmo event_id do padrao", ev["event_id"] == conv.event_id)
 ev2 = dispatch._build_meta_page(cfg, contact, conv)["data"][0]
 check("sem campanha no cache, so o anuncio", "campaign_name" not in ev2["custom_data"] and ev2["custom_data"]["ad_id"] == "120241", ev2["custom_data"])
 
+print("instagram")
+ig = {"meta_instagram_id": "17841400000000000"}
+check("lead do Instagram usa o ID do Instagram", meta_capi.page_id_for({**cfg, **ig}, "instagram") == "17841400000000000")
+check("lead do Facebook usa a Pagina", meta_capi.page_id_for({**cfg, **ig}, "facebook") == "3236814274")
+check("so Instagram preenchido serve pra qualquer lead", meta_capi.page_id_for(ig, "facebook") == "17841400000000000")
+check("so Pagina preenchida serve pro Instagram", meta_capi.page_id_for(cfg, "instagram") == "3236814274")
+ev_ig = dispatch._build_meta_page({**cfg, **ig}, contact, conv)["data"][0]
+check("contato do Instagram vai com o ID do Instagram", ev_ig["user_data"]["page_id"] == "17841400000000000", ev_ig["user_data"])
+
 print("paralelo")
-check("com Page ID entra junto do meta_capi", dispatch._with_parallel(cfg, ["meta_capi", "webhook"]) == ["meta_capi", "meta_capi_page", "webhook"])
+waba = {**cfg, "meta_waba_id": "1098"}
+check("com WABA e Page ID sai os dois", dispatch._with_parallel(waba, ["meta_capi", "webhook"]) == ["meta_capi", "meta_capi_page", "webhook"])
+check("sem WABA, o page entra no lugar", dispatch._with_parallel(cfg, ["meta_capi", "webhook"]) == ["meta_capi_page", "webhook"])
+check("so Instagram tambem liga o page", dispatch._with_parallel({**ig, "meta_waba_id": "1"}, ["meta_capi"]) == ["meta_capi", "meta_capi_page"])
 check("sem Page ID nao entra", dispatch._with_parallel({}, ["meta_capi"]) == ["meta_capi"])
 check("sem meta_capi nao entra", dispatch._with_parallel(cfg, ["google_ads"]) == ["google_ads"])
-check("nao duplica", dispatch._with_parallel(cfg, ["meta_capi", "meta_capi_page"]) == ["meta_capi", "meta_capi_page"])
+check("nao duplica", dispatch._with_parallel(waba, ["meta_capi", "meta_capi_page"]) == ["meta_capi", "meta_capi_page"])
+check("nao duplica sem WABA", dispatch._with_parallel(cfg, ["meta_capi", "meta_capi_page"]) == ["meta_capi_page"])
 
 print("o formato padrao continua igual")
 std = dispatch._build_meta({**cfg, "meta_waba_id": "1098"}, contact, conv)["data"][0]

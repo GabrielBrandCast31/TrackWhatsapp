@@ -84,6 +84,7 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
     meta_capi_token: '',
     meta_test_event_code: instance.meta_test_event_code,
     meta_page_id: instance.meta_page_id ?? '',
+    meta_instagram_id: instance.meta_instagram_id ?? '',
     meta_waba_id: instance.meta_waba_id ?? '',
     meta_ads_token: '',
   })
@@ -96,16 +97,16 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
       meta_capi_token: '',
       meta_test_event_code: instance.meta_test_event_code,
       meta_page_id: instance.meta_page_id ?? '',
+    meta_instagram_id: instance.meta_instagram_id ?? '',
       meta_waba_id: instance.meta_waba_id ?? '',
       meta_ads_token: '',
     })
-  }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code, instance.meta_page_id, instance.meta_waba_id])
+  }, [instance.id, instance.meta_dataset_id, instance.meta_test_event_code, instance.meta_page_id, instance.meta_instagram_id, instance.meta_waba_id])
 
-  // o evento padrao vai com o WABA (sem ele: code 100 / subcode 2804116). Com Page ID
-  // sai em paralelo o formato `page_id` + ctwa_clid (destino meta_capi_page), que
-  // o Meta aceita sem WABA — qualquer um dos dois deixa a linha pronta.
-  // nao serve: e o identificador do Messenger, e a Meta ignora no canal whatsapp.
-  const hasBusinessId = Boolean(instance.meta_waba_id || instance.meta_page_id)
+  // o evento padrao vai com o WABA. Com Page ID ou ID do Instagram sai tambem o
+  // formato `page_id` + ctwa_clid (destino meta_capi_page), que dispensa o WABA —
+  // qualquer um dos tres deixa a linha pronta.
+  const hasBusinessId = Boolean(instance.meta_waba_id || instance.meta_page_id || instance.meta_instagram_id)
   const ready = Boolean(instance.meta_dataset_id) && instance.meta_capi_token__set && hasBusinessId
 
   return (
@@ -147,19 +148,31 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
           </Field>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="WhatsApp Business Account ID (WABA)" hint="Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. Vai no evento padrão do WhatsApp.">
+        <p className="text-xs text-ink-400">
+          Identificação do anúncio — todos opcionais, basta um. O <code>ctwa_clid</code> é gerado pela conta que roda
+          o anúncio: lead do Instagram vai com o ID do Instagram, o resto com o Page ID (se só um estiver preenchido,
+          vai ele).
+        </p>
+        <div className="grid gap-4 md:grid-cols-3">
+          <Field label="WABA ID (opcional)" hint="Business Manager → Configurações do negócio → Contas → Contas do WhatsApp → clique na conta: o número de identificação. Vai no evento padrão do WhatsApp.">
             <Input
               value={draft.meta_waba_id}
               placeholder="109876543210987"
               onChange={(e) => setDraft({ ...draft, meta_waba_id: e.target.value })}
             />
           </Field>
-          <Field label="Page ID (Página do anúncio)" hint="ID da Página do Facebook que roda o anúncio Click to WhatsApp. Preenchido, cada conversão também sai em paralelo no formato page_id + ctwa_clid (LeadSubmitted), que não depende do WABA.">
+          <Field label="Page ID do Facebook (opcional)" hint="ID da Página do Facebook que roda o anúncio Click to WhatsApp. Preenchido, a conversão também sai no formato page_id + ctwa_clid, que não depende do WABA.">
             <Input
               value={draft.meta_page_id}
               placeholder="323681427480000"
               onChange={(e) => setDraft({ ...draft, meta_page_id: e.target.value })}
+            />
+          </Field>
+          <Field label="ID do Instagram (opcional)" hint="ID da conta do Instagram que roda o anúncio (Business Manager → Contas → Contas do Instagram). Usado no lugar do Page ID quando o lead veio de anúncio no Instagram.">
+            <Input
+              value={draft.meta_instagram_id}
+              placeholder="17841400000000000"
+              onChange={(e) => setDraft({ ...draft, meta_instagram_id: e.target.value })}
             />
           </Field>
         </div>
@@ -182,8 +195,8 @@ function MetaDestination({ instance, onSaved }: { instance: EvoInstance; onSaved
 
         {!hasBusinessId && (
           <Banner tone="warn">
-            Sem WABA ID nem Page ID o Meta recusa o evento do WhatsApp (“não tem page_id nem
-            whatsapp_business_account_id”, code 100 / subcode 2804116). Preencha ao menos um dos dois.
+            Sem WABA, Page ID nem ID do Instagram o Meta recusa o evento do WhatsApp (“não tem page_id nem
+            whatsapp_business_account_id”, code 100 / subcode 2804116). Preencha ao menos um dos três.
           </Banner>
         )}
 

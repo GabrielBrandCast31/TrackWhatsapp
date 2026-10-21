@@ -205,7 +205,7 @@ async def preview_conversion(payload: ConversionIn, session: AsyncSession = Depe
     except Exception as exc:  # noqa: BLE001
         previews["meta_capi"] = {"error": str(exc)}
 
-    page_id = meta_capi.business_ids(cfg)["page_id"]
+    page_id = meta_capi.page_id_for(cfg, contact.ad_source_app)
     if page_id:
         from app.models import AdCampaign
         from app.services.dispatch import ad_custom_data

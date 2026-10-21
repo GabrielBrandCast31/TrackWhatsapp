@@ -924,6 +924,7 @@ export type EvoInstance = {
   meta_dataset_id: string
   meta_test_event_code: string
   meta_page_id: string
+  meta_instagram_id?: string
   meta_waba_id: string
   meta_capi_token__set: boolean
   meta_capi_token__hint: string

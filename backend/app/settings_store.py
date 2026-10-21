@@ -48,6 +48,9 @@ DEFAULTS: dict = {
     # em user_data. `meta_page_id` e do Messenger e nao entra no evento de
     # WhatsApp — fica guardado so para nao perder o que ja foi cadastrado.
     "meta_page_id": os.getenv("META_PAGE_ID", ""),
+    # conta do Instagram que roda o anuncio CTWA: o ctwa_clid de lead que veio do
+    # Instagram e gerado por ela, entao e ela que vai no formato `page_id`.
+    "meta_instagram_id": os.getenv("META_INSTAGRAM_ID", ""),
     "meta_waba_id": os.getenv("META_WABA_ID", ""),
     # token com `ads_read` (usuario do sistema do Business Manager). E com ele que
     # o `ad_id` do anuncio vira nome de campanha + objetivo. Vazio: tenta o da CAPI.

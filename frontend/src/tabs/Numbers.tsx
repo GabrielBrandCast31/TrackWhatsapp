@@ -48,8 +48,10 @@ const OVERRIDE_FIELDS: { key: string; label: string; hint?: string; secret?: boo
   {
     key: 'meta_waba_id',
     label: 'WhatsApp Business Account ID (WABA)',
-    hint: 'Obrigatório no evento do WhatsApp. Em branco, usa o WABA ID da própria linha da Cloud API.',
+    hint: 'Opcional (basta ele, o Page ID ou o ID do Instagram). Em branco, usa o WABA ID da própria linha da Cloud API.',
   },
+  { key: 'meta_page_id', label: 'Page ID do Facebook', hint: 'Opcional — Página que roda o anúncio.' },
+  { key: 'meta_instagram_id', label: 'ID do Instagram', hint: 'Opcional — usado em lead que veio de anúncio no Instagram.' },
   { key: 'google_customer_id', label: 'Google Ads Customer ID', hint: 'Sem traços.' },
   { key: 'google_conversion_action_id', label: 'Google Conversion Action ID' },
   { key: 'webhook_url', label: 'Webhook de saída (URL)' },

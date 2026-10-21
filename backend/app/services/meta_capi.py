@@ -189,6 +189,20 @@ def business_ids(cfg: dict) -> dict:
     }
 
 
+def page_id_for(cfg: dict, source_app: str | None = None) -> str | None:
+    """ID que vai em `user_data.page_id` no formato page: o dono do anuncio.
+
+    O Meta exige que o `ctwa_clid` tenha sido gerado por esse mesmo ID. Lead que
+    veio de anuncio no Instagram usa a conta do Instagram; o resto, a Pagina do
+    Facebook. Com so um dos dois preenchido, vai o que tiver.
+    """
+    page = (cfg.get("meta_page_id") or "").strip() or None
+    instagram = (cfg.get("meta_instagram_id") or "").strip() or None
+    if (source_app or "").lower() == "instagram":
+        return instagram or page
+    return page or instagram
+
+
 async def send(cfg: dict, payload: dict) -> tuple[int, dict]:
     """POST /{dataset_id}/events. Devolve (http_status, corpo)."""
     dataset = cfg.get("meta_dataset_id") or ""
