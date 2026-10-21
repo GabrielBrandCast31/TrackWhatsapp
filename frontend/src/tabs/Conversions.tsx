@@ -2,10 +2,33 @@ import { useEffect, useState } from 'react'
 
 import { useNumber } from '../numberContext'
 import { api, DESTINATION_LABEL, type Conversion, type Dispatch } from '../api'
-import { Badge, Button, Card, Empty, Json, when } from '../ui'
+import { Badge, Button, Card, Copy, Empty, Json, when } from '../ui'
 
-function DispatchRow({ d }: { d: Dispatch }) {
+function Payload({ label, value, empty }: { label: string; value: Record<string, unknown>; empty: string }) {
+  const hasData = value && Object.keys(value).length > 0
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <p className="text-[11px] uppercase tracking-wide text-ink-500">{label}</p>
+        {hasData && <Copy text={JSON.stringify(value, null, 2)} />}
+      </div>
+      {hasData ? <Json value={value} max={480} /> : <p className="text-[11px] italic text-ink-500">{empty}</p>}
+    </div>
+  )
+}
+
+function DispatchRow({
+  d,
+  busy,
+  onResend,
+}: {
+  d: Dispatch
+  busy: boolean
+  onResend: (force: boolean) => void
+}) {
   const tone = d.status === 'ok' ? 'good' : d.status === 'error' ? 'bad' : 'neutral'
+  // erro sem resposta = barrado pela checagem local, o Meta nem foi chamado
+  const blockedLocally = d.status === 'error' && d.destination === 'meta_capi' && !Object.keys(d.response_body ?? {}).length
   return (
     <details className="rounded-lg border border-ink-800 bg-ink-850">
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2">
@@ -20,13 +43,30 @@ function DispatchRow({ d }: { d: Dispatch }) {
             {d.error}
           </p>
         )}
-        <div>
-          <p className="mb-1 text-[11px] uppercase tracking-wide text-ink-500">request</p>
-          <Json value={d.request_payload} max={240} />
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Payload
+            label="request"
+            value={d.request_payload}
+            empty="Nada foi montado — o erro aconteceu antes de gerar o payload."
+          />
+          <Payload
+            label={d.http_status !== null ? `response · HTTP ${d.http_status}` : 'response'}
+            value={d.response_body}
+            empty="Sem resposta do destino — a requisição não chegou a ser feita."
+          />
         </div>
-        <div>
-          <p className="mb-1 text-[11px] uppercase tracking-wide text-ink-500">response</p>
-          <Json value={d.response_body} max={200} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={busy} onClick={() => onResend(false)}>
+            {busy ? 'enviando…' : 'reenviar este destino'}
+          </Button>
+          {blockedLocally && (
+            <>
+              <Button size="sm" disabled={busy} onClick={() => onResend(true)}>
+                enviar pro Meta mesmo assim
+              </Button>
+              <span className="text-[11px] text-ink-500">pula a checagem local e mostra a resposta real do Meta</span>
+            </>
+          )}
         </div>
       </div>
     </details>
@@ -37,6 +77,18 @@ export default function Conversions({ onChanged }: { onChanged: () => void }) {
   const { numberId, current } = useNumber()
   const [rows, setRows] = useState<Conversion[]>([])
   const [busy, setBusy] = useState<number | null>(null)
+  const [busyDispatch, setBusyDispatch] = useState<number | null>(null)
+
+  const resend = async (c: Conversion, d: Dispatch, force: boolean) => {
+    setBusyDispatch(d.id)
+    try {
+      await api.retry(c.id, { destinations: [d.destination], force })
+      await load()
+      onChanged()
+    } finally {
+      setBusyDispatch(null)
+    }
+  }
 
   const load = async () => setRows(await api.conversions(numberId))
   useEffect(() => {
@@ -105,7 +157,12 @@ export default function Conversions({ onChanged }: { onChanged: () => void }) {
 
                 <div className="mt-3 space-y-2">
                   {c.dispatches.map((d) => (
-                    <DispatchRow key={d.id} d={d} />
+                    <DispatchRow
+                      key={d.id}
+                      d={d}
+                      busy={busyDispatch === d.id}
+                      onResend={(force) => void resend(c, d, force)}
+                    />
                   ))}
                 </div>
               </li>

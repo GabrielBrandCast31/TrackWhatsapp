@@ -16,7 +16,11 @@ ADS_HOST = "https://googleads.googleapis.com"
 
 
 class GoogleAdsError(Exception):
-    pass
+    def __init__(self, message: str, http_status: int | None = None, body: dict | None = None):
+        super().__init__(message)
+        # resposta crua do destino, pra aparecer no historico mesmo quando falha
+        self.http_status = http_status
+        self.body = body
 
 
 async def _access_token(cfg: dict) -> str:
@@ -124,12 +128,12 @@ async def send(cfg: dict, payload: dict) -> tuple[int, dict]:
         body = {"raw": resp.text[:2000]}
 
     if resp.status_code >= 400:
-        raise GoogleAdsError(_readable_error(body, resp.status_code))
+        raise GoogleAdsError(_readable_error(body, resp.status_code), resp.status_code, body)
 
     # partialFailure devolve 200 com o erro dentro do corpo
     partial = body.get("partialFailureError") if isinstance(body, dict) else None
     if partial:
-        raise GoogleAdsError(f"Partial failure: {partial.get('message')}")
+        raise GoogleAdsError(f"Partial failure: {partial.get('message')}", resp.status_code, body)
 
     return resp.status_code, body
 

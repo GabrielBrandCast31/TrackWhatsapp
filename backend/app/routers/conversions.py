@@ -139,9 +139,14 @@ async def create_conversion(payload: ConversionIn, session: AsyncSession = Depen
 async def retry_conversion(
     conversion_id: int,
     destinations: list[str] | None = None,
+    force: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
 ):
-    """Reenvia a MESMA conversao (mesmo event_id) — o Meta deduplica pelo event_id."""
+    """Reenvia a MESMA conversao (mesmo event_id) — o Meta deduplica pelo event_id.
+
+    Com `destinations` explicito, manda so esses (sem puxar o formato paralelo).
+    `force` pula as checagens locais pra ver a resposta real do destino.
+    """
     conv = (
         await session.execute(
             select(Conversion).options(selectinload(Conversion.dispatches)).where(Conversion.id == conversion_id)
@@ -155,7 +160,7 @@ async def retry_conversion(
 
     cfg = await _cfg_for_contact(session, contact)
     targets = destinations or [d.destination for d in conv.dispatches if d.status == "error"] or None
-    await dispatch_conversion(session, cfg, conv, contact, targets)
+    await dispatch_conversion(session, cfg, conv, contact, targets, force=force, exact=bool(destinations))
 
     refreshed = (
         await session.execute(

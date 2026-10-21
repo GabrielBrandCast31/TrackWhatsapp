@@ -1204,7 +1204,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  retry: (id: number) => request<Conversion>(`/api/conversions/${id}/retry`, { method: 'POST' }),
+  retry: (id: number, opts: { destinations?: Dispatch['destination'][]; force?: boolean } = {}) =>
+    request<Conversion>(`/api/conversions/${id}/retry${opts.force ? '?force=true' : ''}`, {
+      method: 'POST',
+      ...(opts.destinations ? { body: JSON.stringify(opts.destinations) } : {}),
+    }),
   webhookLogs: (numberId?: number) =>
     request<
       {

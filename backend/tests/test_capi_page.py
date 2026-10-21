@@ -59,7 +59,7 @@ check("nao duplica", dispatch._with_parallel(cfg, ["meta_capi", "meta_capi_page"
 print("o formato padrao continua igual")
 std = dispatch._build_meta({**cfg, "meta_waba_id": "1098"}, contact, conv)["data"][0]
 check("padrao segue com WABA e sem page_id", std["user_data"].get("whatsapp_business_account_id") == "1098" and "page_id" not in std["user_data"], std)
-check("padrao segue com Lead", std["event_name"] == "Lead")
+check("padrao tambem manda LeadSubmitted", std["event_name"] == "LeadSubmitted", std["event_name"])
 
 print("erros")
 try:

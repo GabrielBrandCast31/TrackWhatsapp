@@ -36,7 +36,11 @@ GRAPH = "https://graph.facebook.com"
 
 
 class CapiError(Exception):
-    pass
+    def __init__(self, message: str, http_status: int | None = None, body: dict | None = None):
+        super().__init__(message)
+        # resposta crua do destino, pra aparecer no historico mesmo quando falha
+        self.http_status = http_status
+        self.body = body
 
 
 def _sha256(value: str) -> str:
@@ -55,6 +59,12 @@ def hash_email(email: str | None) -> str | None:
     if not email:
         return None
     return _sha256(email.strip().lower())
+
+
+# Nome do evento que vai pro Meta: a lista de eventos da Conversions API for
+# Business Messaging usa `LeadSubmitted` no lugar do `Lead` do pixel. Vale pros
+# dois formatos (WABA e page_id); por dentro o evento continua `Lead`.
+MESSAGING_EVENT_NAMES = {"Lead": "LeadSubmitted"}
 
 
 def build_payload(
@@ -94,7 +104,7 @@ def build_payload(
         custom_data["currency"] = currency
 
     event: dict = {
-        "event_name": event_name,
+        "event_name": MESSAGING_EVENT_NAMES.get(event_name, event_name),
         "event_time": event_time or int(time.time()),
         "event_id": event_id,
         "action_source": "business_messaging",
@@ -108,11 +118,6 @@ def build_payload(
     if test_event_code:
         payload["test_event_code"] = test_event_code
     return payload
-
-
-# Nome do evento no formato "page": a lista de eventos da Conversions API for
-# Business Messaging usa `LeadSubmitted` no lugar do `Lead` do pixel.
-PAGE_EVENT_NAMES = {"Lead": "LeadSubmitted"}
 
 
 def build_page_payload(
@@ -149,7 +154,7 @@ def build_page_payload(
     if ctwa_clid:
         user_data["ctwa_clid"] = ctwa_clid
 
-    name = PAGE_EVENT_NAMES.get(event_name, event_name)
+    name = MESSAGING_EVENT_NAMES.get(event_name, event_name)
     custom_data: dict = {k: v for k, v in (ad or {}).items() if v not in (None, "")}
     custom_data["status"] = name
     custom_data["currency"] = currency
@@ -206,6 +211,8 @@ async def send(cfg: dict, payload: dict) -> tuple[int, dict]:
     if isinstance(body, dict) and "error" in body:
         err = body["error"]
         msg = err.get("error_user_msg") or err.get("message") or "Erro desconhecido."
-        raise CapiError(f"{msg} (code {err.get('code')}, subcode {err.get('error_subcode')})")
+        raise CapiError(
+            f"{msg} (code {err.get('code')}, subcode {err.get('error_subcode')})", resp.status_code, body
+        )
 
     return resp.status_code, body

@@ -49,7 +49,7 @@ def _sanitize(payload: dict) -> dict:
 
 
 def _build_meta(cfg: dict, contact: Contact, conv: Conversion, campaign: AdCampaign | None = None) -> dict:
-    payload = meta_capi.build_payload(
+    return meta_capi.build_payload(
         event_name=conv.event_name,
         event_id=conv.event_id,
         ctwa_clid=contact.ctwa_clid,
@@ -61,12 +61,16 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion, campaign: AdCampa
         test_event_code=(cfg.get("meta_test_event_code") or None) if conv.is_test else None,
         extra_custom={"lead_source": "whatsapp", "ad_id": contact.source_id} if contact.source_id else None,
     )
-    if not payload["data"][0]["user_data"].get("ctwa_clid"):
+
+
+def _check_meta(cfg: dict, payload: dict) -> None:
+    """Barra antes de enviar o que o Meta com certeza recusa. `force` pula isso."""
+    user_data = payload["data"][0]["user_data"]
+    if not user_data.get("ctwa_clid"):
         raise meta_capi.CapiError(
             "Contato sem ctwa_clid — o Meta nao consegue atribuir esse evento a uma campanha. "
             "Use um lead vindo de anuncio Click to WhatsApp (ou o simulador)."
         )
-    user_data = payload["data"][0]["user_data"]
     if not user_data.get("whatsapp_business_account_id"):
         has_page = bool(meta_capi.business_ids(cfg)["page_id"])
         raise meta_capi.CapiError(
@@ -75,7 +79,6 @@ def _build_meta(cfg: dict, contact: Contact, conv: Conversion, campaign: AdCampa
             + ". Pegue em Business Manager > Configurações do negócio > Contas > Contas do WhatsApp "
             "e preencha em Rastreamento > Meta."
         )
-    return payload
 
 
 def ad_custom_data(contact: Contact, campaign: AdCampaign | None) -> dict:
@@ -163,12 +166,12 @@ def _build_webhook(cfg: dict, contact: Contact, conv: Conversion, campaign: AdCa
     }
 
 
-# destino -> (monta o payload, envia o payload)
+# destino -> (monta o payload, checa antes de enviar, envia o payload)
 _RUNNERS = {
-    "meta_capi": (_build_meta, meta_capi.send),
-    "meta_capi_page": (_build_meta_page, meta_capi.send),
-    "google_ads": (_build_google, google_ads.send),
-    "webhook": (_build_webhook, generic_webhook.send),
+    "meta_capi": (_build_meta, _check_meta, meta_capi.send),
+    "meta_capi_page": (_build_meta_page, None, meta_capi.send),
+    "google_ads": (_build_google, None, google_ads.send),
+    "webhook": (_build_webhook, None, generic_webhook.send),
 }
 
 
@@ -178,9 +181,18 @@ async def dispatch_conversion(
     conv: Conversion,
     contact: Contact,
     destinations: list[str] | None = None,
+    *,
+    force: bool = False,
+    exact: bool = False,
 ) -> list[Dispatch]:
-    """Envia a conversao. Sem `destinations`, usa os que estao habilitados na config."""
-    targets = _with_parallel(cfg, destinations if destinations else enabled_destinations(cfg))
+    """Envia a conversao. Sem `destinations`, usa os que estao habilitados na config.
+
+    `force` pula as checagens locais e manda mesmo assim, pra ver o que o destino
+    responde. `exact` envia so os destinos pedidos, sem puxar o formato paralelo.
+    """
+    targets = destinations if destinations else enabled_destinations(cfg)
+    if not exact:
+        targets = _with_parallel(cfg, targets)
     results: list[Dispatch] = []
     # so o cache: consultar a Marketing API aqui atrasaria o envio
     campaign = await session.get(AdCampaign, contact.source_id) if contact.source_id else None
@@ -192,12 +204,14 @@ async def dispatch_conversion(
             record.status = "skipped"
             record.error = f"Destino desconhecido: {dest}"
         else:
-            build, send = runner
+            build, check, send = runner
             try:
                 payload = build(cfg, contact, conv, campaign)
                 # grava o payload ANTES de enviar: se o destino recusar, voce
                 # ainda ve exatamente o que foi montado.
                 record.request_payload = _sanitize(payload)
+                if check is not None and not force:
+                    check(cfg, payload)
                 http_status, body = await send(cfg, payload)
                 record.http_status = http_status
                 record.response_body = body if isinstance(body, dict) else {"data": body}
@@ -205,6 +219,10 @@ async def dispatch_conversion(
             except Exception as exc:  # noqa: BLE001 — o erro do destino e o produto aqui
                 record.status = "error"
                 record.error = str(exc)
+                if getattr(exc, "http_status", None) is not None:
+                    record.http_status = exc.http_status
+                if getattr(exc, "body", None) is not None:
+                    record.response_body = exc.body
         session.add(record)
         results.append(record)
 

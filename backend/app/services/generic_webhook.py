@@ -12,7 +12,11 @@ import httpx
 
 
 class WebhookError(Exception):
-    pass
+    def __init__(self, message: str, http_status: int | None = None, body: dict | None = None):
+        super().__init__(message)
+        # resposta crua do destino, pra aparecer no historico mesmo quando falha
+        self.http_status = http_status
+        self.body = body
 
 
 async def send(cfg: dict, payload: dict) -> tuple[int, dict]:
@@ -37,6 +41,10 @@ async def send(cfg: dict, payload: dict) -> tuple[int, dict]:
         parsed = {"raw": resp.text[:2000]}
 
     if resp.status_code >= 400:
-        raise WebhookError(f"Destino respondeu HTTP {resp.status_code}: {resp.text[:300]}")
+        raise WebhookError(
+            f"Destino respondeu HTTP {resp.status_code}: {resp.text[:300]}",
+            resp.status_code,
+            parsed if isinstance(parsed, dict) else {"data": parsed},
+        )
 
     return resp.status_code, parsed if isinstance(parsed, dict) else {"data": parsed}
