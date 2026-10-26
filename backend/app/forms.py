@@ -12,6 +12,10 @@ Cada formulario pertence a uma linha (o cliente). Uma resposta:
 5. faz POST num webhook, se configurado (com trava contra rede interna).
 
 Os passos 3 a 5 correm depois de gravar: falha deles nunca perde o lead.
+
+Enquanto a pessoa preenche, a pagina grava o rascunho em `form_partials` (uma
+linha por visita). Quem fecha a aba no meio fica la como abandono; quem envia
+tem o rascunho ligado a resposta e sai da lista.
 """
 
 from __future__ import annotations
@@ -30,13 +34,14 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import journey, phones, settings_store
 from app import numbers as numbers_service
 from app.db import SessionLocal
 from app.ingest import upsert_contact
-from app.models import Contact, FormResponse, LeadForm, WaNumber
+from app.models import Contact, FormPartial, FormResponse, LeadForm, WaNumber
 
 log = logging.getLogger(__name__)
 
@@ -199,7 +204,7 @@ def apply(form: LeadForm, d: dict) -> None:
             setattr(form, k, bool(d[k]))
 
 
-def serialize(form: LeadForm, responses: int = 0, number: WaNumber | None = None) -> dict:
+def serialize(form: LeadForm, responses: int = 0, number: WaNumber | None = None, partials: int = 0) -> dict:
     return {
         "id": form.id,
         "slug": form.slug,
@@ -217,6 +222,7 @@ def serialize(form: LeadForm, responses: int = 0, number: WaNumber | None = None
         "active": bool(form.active),
         "views": form.views or 0,
         "responses": responses,
+        "partials": partials,
         "pixel_id": form.pixel_id or "",
         # o token nunca volta inteiro: a tela so precisa saber que existe
         "capi_token": "",
@@ -233,6 +239,18 @@ async def response_counts(session: AsyncSession, ids: list[int]) -> dict[int, in
         select(FormResponse.form_id, func.count(FormResponse.id))
         .where(FormResponse.form_id.in_(ids))
         .group_by(FormResponse.form_id)
+    )
+    return dict(rows.all())
+
+
+async def partial_counts(session: AsyncSession, ids: list[int]) -> dict[int, int]:
+    """Preenchimentos abandonados (sem resposta enviada) por formulario."""
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(FormPartial.form_id, func.count(FormPartial.id))
+        .where(FormPartial.form_id.in_(ids), FormPartial.response_id.is_(None))
+        .group_by(FormPartial.form_id)
     )
     return dict(rows.all())
 
@@ -297,6 +315,60 @@ def normalize_answers(form: LeadForm, answers: dict) -> tuple[dict, dict]:
     return clean, labels
 
 
+SESSION_KEY_SHAPE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def partial_answers(form: LeadForm, answers: dict) -> dict:
+    """Respostas do jeito que estao, sem validar: o rascunho pode estar no meio."""
+    out: dict[str, str] = {}
+    for f in clean_fields(form.fields):
+        raw = answers.get(f["id"], "")
+        if isinstance(raw, (list, tuple)):
+            v = ", ".join(str(x).strip() for x in raw if str(x).strip())
+        else:
+            v = str(raw or "").strip()
+        if v:
+            out[f["id"]] = v[:1000]
+    return out
+
+
+async def save_partial(session: AsyncSession, form: LeadForm, sid: str, answers: dict, step: int, ctx: dict) -> bool:
+    """Grava (ou atualiza) o preenchimento em andamento dessa visita.
+
+    Visita sem nenhuma resposta nao vira linha, e uma visita que ja enviou nao
+    volta a ser rascunho (o navegador pode mandar o ultimo salvamento atrasado).
+    """
+    if not SESSION_KEY_SHAPE.fullmatch(sid or ""):
+        return False
+    clean = partial_answers(form, answers)
+    partial = (
+        await session.execute(
+            select(FormPartial).where(FormPartial.form_id == form.id, FormPartial.session_key == sid)
+        )
+    ).scalars().first()
+    if partial is not None and partial.response_id is not None:
+        return False
+    if not clean:
+        return False
+    if partial is None:
+        partial = FormPartial(form_id=form.id, session_key=sid)
+        session.add(partial)
+    partial.answers = clean
+    partial.step = max(0, min(int(step or 0), len(clean_fields(form.fields))))
+    tl = ctx.get("tl")
+    if tl and journey.TL_ID_SHAPE.match(tl):
+        partial.transaction_id = tl
+    partial.ip = (ctx.get("ip") or "")[:64] or None
+    partial.user_agent = (ctx.get("ua") or "")[:500] or None
+    try:
+        await session.commit()
+    except IntegrityError:
+        # dois salvamentos da mesma visita ao mesmo tempo: o outro ja gravou
+        await session.rollback()
+        return False
+    return True
+
+
 def _first(form: LeadForm, clean: dict, ftype: str) -> str:
     for f in clean_fields(form.fields):
         if f["type"] == ftype and clean.get(f["id"]):
@@ -341,6 +413,21 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
         if event is not None:
             session.add(event)
     await session.flush()
+
+    # o rascunho dessa visita deixa de ser abandono: virou resposta. Sem rascunho
+    # ainda, cria ja fechado — um salvamento atrasado nao reabre como abandono.
+    sid = ctx.get("sid") or ""
+    if SESSION_KEY_SHAPE.fullmatch(sid):
+        partial = (
+            await session.execute(
+                select(FormPartial).where(FormPartial.form_id == form.id, FormPartial.session_key == sid)
+            )
+        ).scalars().first()
+        if partial is None:
+            partial = FormPartial(form_id=form.id, session_key=sid, step=len(clean_fields(form.fields)))
+            session.add(partial)
+        partial.answers = {k: v for k, v in clean.items() if v}
+        partial.response_id = response.id
 
     contact = None
     e164 = phones.to_e164(phone) if phone else None
@@ -405,13 +492,7 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
 
         if form.whatsapp_notify and number is not None:
             try:
-                from app.services import evolution
-
-                cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
-                to = phones.to_wa_id(phones.to_e164(form.whatsapp_notify)) or phones.digits(form.whatsapp_notify)
-                await evolution.send_text(
-                    cfg, to, f"🔥 *Novo lead no formulário \"{form.title}\"!*\n\n{resumo}"
-                )
+                await send_notify(session, number, form.whatsapp_notify, notify_text(form.title, resumo))
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: aviso no WhatsApp falhou: %s", form.id, exc)
 
@@ -427,6 +508,37 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
                 await send_webhook(form, response_id, clean, labels, url)
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: webhook falhou: %s", form.id, exc)
+
+
+def notify_text(title: str, resumo: str, test: bool = False) -> str:
+    if test:
+        return f"🧪 *Teste de aviso — formulário \"{title}\"*\n\nAssim chega o aviso de cada nova resposta:\n\n{resumo}"
+    return f"🔥 *Novo lead no formulário \"{title}\"!*\n\n{resumo}"
+
+
+async def send_notify(session: AsyncSession, number: WaNumber, phone: str, text: str) -> None:
+    """Aviso da equipe no WhatsApp, pela instancia da propria linha."""
+    from app.services import evolution
+
+    cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
+    to = phones.to_wa_id(phones.to_e164(phone)) or phones.digits(phone)
+    await evolution.send_text(cfg, to, text)
+
+
+SAMPLE_ANSWERS = {
+    "text": "Maria Silva", "email": "maria@exemplo.com", "phone": "(31) 98888-7777",
+    "number": "3", "date": "01/12/2026", "url": "https://exemplo.com", "rating": "5",
+    "textarea": "Gostaria de saber mais.",
+}
+
+
+def sample_resumo(fields) -> str:
+    """Resumo com respostas de exemplo, no mesmo formato do aviso real."""
+    lines = []
+    for f in clean_fields(fields):
+        v = f["options"][0] if f["options"] else SAMPLE_ANSWERS.get(f["type"], "Resposta de exemplo")
+        lines.append(f"{f['label']}: {v}")
+    return "\n".join(lines) or "Seu nome: Maria Silva"
 
 
 async def fix_wa_id(session: AsyncSession, number: WaNumber, response_id: int) -> None:

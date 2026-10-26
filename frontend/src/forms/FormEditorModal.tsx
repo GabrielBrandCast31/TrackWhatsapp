@@ -9,7 +9,7 @@ import {
   Shield, Sparkles, Trash2, Upload, X,
 } from './icons';
 import {
-  createForm, updateForm,
+  createForm, testFormNotify, updateForm,
   type FormLine, type LeadForm, type LeadFormField, type LeadFormFieldType,
   type LeadFormSettings, type LeadFormTheme,
 } from './client';
@@ -84,6 +84,18 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
   const [shortcuts, setShortcuts] = useState(false);
   const [copied, setCopied] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);   // gerar perguntas com IA
+  // teste do aviso no WhatsApp: resultado mostrado embaixo do campo
+  const [notifyTest, setNotifyTest] = useState<{ busy: boolean; ok?: boolean; msg?: string }>({ busy: false });
+
+  async function sendNotifyTest() {
+    setNotifyTest({ busy: true });
+    try {
+      await testFormNotify({ wa_number_id: d.wa_number_id, phone: d.whatsapp_notify, title: d.title, fields });
+      setNotifyTest({ busy: false, ok: true, msg: "Mensagem de teste enviada. Confira o WhatsApp desse número." });
+    } catch (e) {
+      setNotifyTest({ busy: false, ok: false, msg: e instanceof Error ? e.message : "Não foi possível enviar o teste." });
+    }
+  }
   const searchRef = useRef<HTMLInputElement>(null);
   const logoInput = useRef<HTMLInputElement>(null);
 
@@ -513,8 +525,23 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       body: (
         <>
           <Field label="Avisar no WhatsApp" hint="Mensagem com o resumo da resposta, enviada pela instância da própria linha. Vazio = não avisa.">
-            <input className={INPUT} value={d.whatsapp_notify} placeholder="31 99999-9999"
-              onChange={(e) => set("whatsapp_notify", e.target.value)} />
+            <div className="flex gap-2">
+              <input className={INPUT} value={d.whatsapp_notify} placeholder="31 99999-9999"
+                onChange={(e) => { set("whatsapp_notify", e.target.value); setNotifyTest({ busy: false }); }} />
+              <button type="button" onClick={() => void sendNotifyTest()}
+                disabled={notifyTest.busy || d.whatsapp_notify.replace(/\D/g, "").length < 10 || !d.wa_number_id}
+                title="Envia agora um aviso com respostas de exemplo para este número"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-ink-700 px-3 text-xs font-medium text-ink-200 transition-colors hover:bg-white/5 disabled:opacity-40">
+                {notifyTest.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Bell className="size-3.5" />}
+                Enviar teste
+              </button>
+            </div>
+            {notifyTest.msg && (
+              <p className={`mt-1.5 flex items-start gap-1.5 text-[11px] ${notifyTest.ok ? "text-wa-500" : "text-red-300"}`}>
+                {notifyTest.ok ? <Check className="mt-px size-3.5 shrink-0" /> : <AlertCircle className="mt-px size-3.5 shrink-0" />}
+                {notifyTest.msg}
+              </p>
+            )}
           </Field>
           <Field label="Webhook (opcional)"
             hint="Enviamos um POST com a resposta em JSON assim que o lead chega — Zapier, Make, n8n ou seu CRM.">

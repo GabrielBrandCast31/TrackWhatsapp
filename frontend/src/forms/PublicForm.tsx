@@ -66,6 +66,19 @@ function newEventId(): string {
   return `lead-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+// Chave da visita: amarra os rascunhos (quem para no meio) à resposta final.
+// Fica na sessionStorage para sobreviver a um recarregar da página.
+function visitKey(slug: string): string {
+  const k = `fq-sid:${slug}`;
+  try {
+    const saved = window.sessionStorage.getItem(k);
+    if (saved) return saved;
+  } catch { /* noop */ }
+  const sid = newEventId().replace(/[^A-Za-z0-9_-]/g, "");
+  try { window.sessionStorage.setItem(k, sid); } catch { /* noop */ }
+  return sid;
+}
+
 const ANIM = `
 @keyframes fqIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 .fq-in { animation: fqIn .45s cubic-bezier(.2,.7,.3,1) both; }
@@ -86,6 +99,11 @@ export default function PublicFormPage({ slug }: { slug: string }) {
   // TL_ID) ou a URL configurada
   const [redirectTo, setRedirectTo] = useState("");
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const sid = useMemo(() => visitKey(slug), [slug]);
+  // rascunho: o último corpo enviado (não repete) e o estado atual para o
+  // salvamento de saída, que roda fora do ciclo do React
+  const lastDraft = useRef("");
+  const draftState = useRef({ answers, step, done: false, ready: false });
 
   useEffect(() => {
     fetch(`/api/forms/public/${slug}`)
@@ -134,6 +152,49 @@ export default function PublicFormPage({ slug }: { slug: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
 
+  // Grava até onde a pessoa chegou: quem fecha a aba no meio aparece em
+  // "Incompletos" no painel. Ao enviar, o servidor fecha esse rascunho.
+  function saveDraft(onExit = false) {
+    const s = draftState.current;
+    if (!s.ready || s.done) return;
+    const filled = Object.values(s.answers).some((v) => (Array.isArray(v) ? v.length > 0 : !!(v || "").trim()));
+    if (!filled) return;
+    const reached = stepMode ? Math.max(s.step, 0) : fields.filter((f) => {
+      const v = s.answers[f.id];
+      return Array.isArray(v) ? v.length > 0 : !!(v || "").trim();
+    }).length;
+    const body = JSON.stringify({ sid, answers: s.answers, step: reached, tl: journeyId(), website: "" });
+    if (body === lastDraft.current) return;
+    lastDraft.current = body;
+    const url = `/api/forms/public/${slug}/partial`;
+    try {
+      // fechando a aba, só o sendBeacon garante a entrega
+      if (onExit && navigator.sendBeacon?.(url, new Blob([body], { type: "text/plain" }))) return;
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true })
+        .catch(() => { lastDraft.current = ""; });
+    } catch { /* noop */ }
+  }
+
+  useEffect(() => {
+    draftState.current = { answers, step, done: !!done, ready: !!form };
+    if (!form || done) return;
+    const t = window.setTimeout(() => saveDraft(), 1200);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, step, done, form]);
+
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === "hidden") saveDraft(true); };
+    const onLeave = () => saveDraft(true);
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onLeave);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onLeave);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
+
   function setAnswer(id: string, v: Answer) {
     setAnswers((p) => ({ ...p, [id]: v }));
     setErrs((p) => (p[id] ? { ...p, [id]: "" } : p));
@@ -163,6 +224,8 @@ export default function PublicFormPage({ slug }: { slug: string }) {
           fbp: cookie("_fbp"), fbc: cookie("_fbc"),
           // ID da jornada do visitante (tag de jornada): liga o lead à campanha
           tl: journeyId(),
+          // fecha o rascunho desta visita: sai da lista de incompletos
+          sid,
         }),
       });
       const data = await r.json();

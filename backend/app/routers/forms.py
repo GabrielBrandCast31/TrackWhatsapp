@@ -2,6 +2,7 @@
 pagina /f/{slug} consome — no mesmo dominio do painel.
 """
 
+import json
 import time
 from collections import defaultdict, deque
 
@@ -10,9 +11,9 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import access, form_ai, forms, journey
+from app import access, form_ai, forms, journey, phones
 from app.db import get_session
-from app.models import Contact, FormResponse, LeadForm, WaNumber
+from app.models import Contact, FormPartial, FormResponse, LeadForm, WaNumber
 from app.routers.collect import client_ip
 
 router = APIRouter(prefix="/api/forms", tags=["forms"])
@@ -44,9 +45,13 @@ async def _number(session: AsyncSession, number_id: int | None) -> WaNumber:
 async def list_forms(number_id: int | None = Query(default=None), session: AsyncSession = Depends(get_session)):
     stmt = access.scope(select(LeadForm).order_by(desc(LeadForm.id)), LeadForm.wa_number_id, number_id)
     rows = (await session.execute(stmt)).scalars().all()
-    counts = await forms.response_counts(session, [f.id for f in rows])
+    ids = [f.id for f in rows]
+    counts = await forms.response_counts(session, ids)
+    partials = await forms.partial_counts(session, ids)
     numbers = {n.id: n for n in (await session.execute(select(WaNumber))).scalars().all()}
-    return [forms.serialize(f, counts.get(f.id, 0), numbers.get(f.wa_number_id)) for f in rows]
+    return [
+        forms.serialize(f, counts.get(f.id, 0), numbers.get(f.wa_number_id), partials.get(f.id, 0)) for f in rows
+    ]
 
 
 @router.get("/frameworks")
@@ -100,6 +105,30 @@ async def create_form(payload: dict, session: AsyncSession = Depends(get_session
     return forms.serialize(form, 0, number)
 
 
+class NotifyTestIn(BaseModel):
+    wa_number_id: int | None = None
+    phone: str = ""
+    title: str = ""
+    fields: list = []
+
+
+@router.post("/test-notify")
+async def test_notify(payload: NotifyTestIn, session: AsyncSession = Depends(get_session)):
+    """Manda o aviso de novo lead com respostas de exemplo. Usa o que esta na
+    tela (mesmo sem salvar), pra conferir o numero e a instancia antes de publicar."""
+    number = await _number(session, payload.wa_number_id)
+    if len(phones.digits(payload.phone)) < 10:
+        raise HTTPException(status_code=400, detail="Digite o número que recebe o aviso, com DDD.")
+    text = forms.notify_text(payload.title.strip() or "Novo formulário", forms.sample_resumo(payload.fields), test=True)
+    try:
+        await forms.send_notify(session, number, payload.phone, text)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"O WhatsApp da linha “{number.label}” não enviou: {str(exc)[:300]}"
+        ) from exc
+    return {"ok": True}
+
+
 @router.patch("/{form_id}")
 async def update_form(form_id: int, payload: dict, session: AsyncSession = Depends(get_session)):
     form = await _form(session, form_id)
@@ -109,8 +138,9 @@ async def update_form(form_id: int, payload: dict, session: AsyncSession = Depen
     await session.commit()
     await session.refresh(form)
     counts = await forms.response_counts(session, [form.id])
+    partials = await forms.partial_counts(session, [form.id])
     number = await session.get(WaNumber, form.wa_number_id) if form.wa_number_id else None
-    return forms.serialize(form, counts.get(form.id, 0), number)
+    return forms.serialize(form, counts.get(form.id, 0), number, partials.get(form.id, 0))
 
 
 @router.delete("/{form_id}", status_code=204)
@@ -135,6 +165,37 @@ async def responses(form_id: int, limit: int = Query(default=300, le=2000), sess
         }
         for r in rows
     ]
+
+
+@router.get("/{form_id}/partials")
+async def partials(form_id: int, limit: int = Query(default=300, le=2000), session: AsyncSession = Depends(get_session)):
+    """Quem comecou a preencher e nao enviou."""
+    form = await _form(session, form_id)
+    rows = (
+        await session.execute(
+            select(FormPartial)
+            .where(FormPartial.form_id == form.id, FormPartial.response_id.is_(None))
+            .order_by(desc(FormPartial.updated_at))
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": p.id, "answers": p.answers or {}, "step": p.step or 0,
+            "transaction_id": p.transaction_id, "created_at": p.created_at, "updated_at": p.updated_at,
+        }
+        for p in rows
+    ]
+
+
+@router.delete("/{form_id}/partials/{partial_id}", status_code=204)
+async def delete_partial(form_id: int, partial_id: int, session: AsyncSession = Depends(get_session)):
+    form = await _form(session, form_id)
+    partial = await session.get(FormPartial, partial_id)
+    if partial is None or partial.form_id != form.id:
+        raise HTTPException(status_code=404, detail="Preenchimento não encontrado.")
+    await session.delete(partial)
+    await session.commit()
 
 
 @router.get("/contact/{contact_id}")
@@ -167,14 +228,16 @@ async def contact_responses(contact_id: int, session: AsyncSession = Depends(get
 # trava simples por IP: formulario publico nao pode virar metralhadora de lead falso
 _hits: dict[str, deque] = defaultdict(deque)
 _WINDOW, _MAX = 600, 12
+# o rascunho salva a cada pergunta: folga maior, mas ainda com teto
+_PARTIAL_MAX = 300
 
 
-def _throttle(key: str) -> None:
+def _throttle(key: str, limit: int = _MAX) -> None:
     now = time.monotonic()
     q = _hits[key]
     while q and now - q[0] > _WINDOW:
         q.popleft()
-    if len(q) >= _MAX:
+    if len(q) >= limit:
         raise HTTPException(status_code=429, detail="Muitos envios em pouco tempo. Tente de novo em alguns minutos.")
     q.append(now)
 
@@ -217,9 +280,37 @@ async def public_submit(slug: str, payload: dict, request: Request, session: Asy
         "ip": ip,
         "ua": (request.headers.get("user-agent") or "")[:500],
         "consent": bool(payload.get("consent")),
+        "sid": str(payload.get("sid") or "")[:64],
     }
     answers = payload.get("answers") if isinstance(payload.get("answers"), dict) else {}
     try:
         return await forms.submit(session, form, answers, ctx)
     except forms.SubmitError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@public_router.post("/{slug}/partial")
+async def public_partial(slug: str, request: Request, session: AsyncSession = Depends(get_session)):
+    """Rascunho de quem ainda esta preenchendo. Le o corpo cru porque a pagina
+    usa sendBeacon ao fechar a aba, que nao garante o Content-Type."""
+    try:
+        payload = json.loads(await request.body() or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Corpo inválido.") from None
+    if not isinstance(payload, dict) or payload.get("website"):
+        return {"ok": True}
+    ip = client_ip(request) or ""
+    _throttle(f"partial:{ip}:{slug}", _PARTIAL_MAX)
+    form = await _public(session, slug)
+    answers = payload.get("answers") if isinstance(payload.get("answers"), dict) else {}
+    try:
+        step = int(payload.get("step") or 0)
+    except (TypeError, ValueError):
+        step = 0
+    ctx = {
+        "tl": str(payload.get("tl") or "")[:64],
+        "ip": ip,
+        "ua": (request.headers.get("user-agent") or "")[:500],
+    }
+    saved = await forms.save_partial(session, form, str(payload.get("sid") or "")[:64], answers, step, ctx)
+    return {"ok": True, "saved": saved}

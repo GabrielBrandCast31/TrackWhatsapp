@@ -66,6 +66,8 @@ export interface LeadForm {
   active: boolean
   views: number
   responses: number
+  /** quem começou a preencher e não enviou */
+  partials: number
   pixel_id: string
   /** nunca volta preenchido: só `capi_token__set` diz se existe */
   capi_token: string
@@ -80,6 +82,17 @@ export interface LeadFormResponse {
   contact_id: number | null
   transaction_id: string | null
   created_at: string | null
+}
+
+/** Preenchimento abandonado: respostas até onde a pessoa chegou. */
+export interface LeadFormPartial {
+  id: number
+  answers: Record<string, string>
+  /** última pergunta alcançada (0 = a primeira) */
+  step: number
+  transaction_id: string | null
+  created_at: string | null
+  updated_at: string | null
 }
 
 export interface FormFramework {
@@ -141,7 +154,13 @@ export const generateFormWithAi = (p: FormAiInput) =>
 export const listFormResponses = async (id: number) => ({
   responses: await request<LeadFormResponse[]>(`/api/forms/${id}/responses`),
 })
-export const contactFormResponses = (contactId: number) =>
+/** Manda o aviso de novo lead com respostas de exemplo (usa o que está na tela, mesmo sem salvar). */
+export const testFormNotify = (p: { wa_number_id: number; phone: string; title: string; fields: LeadFormField[] }) =>
+  request<{ ok: boolean }>('/api/forms/test-notify', { method: 'POST', body: JSON.stringify(p) })
+export const listFormPartials =(id: number) => request<LeadFormPartial[]>(`/api/forms/${id}/partials`)
+export const deleteFormPartial = (id: number, partialId: number) =>
+  request<void>(`/api/forms/${id}/partials/${partialId}`, { method: 'DELETE' })
+export const contactFormResponses =(contactId: number) =>
   request<{ id: number; form_id: number; form_title: string; created_at: string; answers: { label: string; value: string }[] }[]>(
     `/api/forms/contact/${contactId}`,
   )

@@ -703,6 +703,31 @@ class FormResponse(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class FormPartial(Base):
+    """Preenchimento em andamento: a pagina publica grava a cada pergunta.
+
+    Uma linha por visita (`session_key` vem do navegador). Quando o envio fecha,
+    `response_id` aponta pra resposta; sem ele, a pessoa abandonou no meio.
+    """
+
+    __tablename__ = "form_partials"
+    __table_args__ = (UniqueConstraint("form_id", "session_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("lead_forms.id", ondelete="CASCADE"), index=True)
+    session_key: Mapped[str] = mapped_column(String(64))
+    answers: Mapped[dict] = mapped_column(JSON, default=dict)
+    step: Mapped[int] = mapped_column(Integer, default=0)          # ultima pergunta alcancada (0 = primeira)
+    response_id: Mapped[int | None] = mapped_column(
+        ForeignKey("form_responses.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    transaction_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, index=True)
+
+
 class UserNumber(Base):
     """Quais linhas (clientes) um usuario de operacao enxerga. Admin ve todas."""
 

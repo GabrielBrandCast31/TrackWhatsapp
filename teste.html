@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description"
+        content="Playbook de ligações de follow-up para clínicas odontológicas, com roteiros prontos e cadência de contato.">
+    <title>Playbook de Follow-up | Clínica Odontológica</title>
+    <style>
+        :root {
+            --ink: #17211f;
+            --muted: #5d6b67;
+            --brand: #087f70;
+            --brand-dark: #075f55;
+            --soft: #eaf6f3;
+            --line: #dce7e3;
+            --paper: #ffffff;
+            --bg: #f3f7f6;
+            --accent: #d7f0e9;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.65;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, #063f39, #087f70 70%, #28a58f);
+            color: #fff;
+            padding: 64px 24px 56px;
+        }
+
+        .hero-inner,
+        main,
+        footer {
+            max-width: 1040px;
+            margin: 0 auto;
+        }
+
+        .eyebrow {
+            display: inline-block;
+            padding: 6px 11px;
+            border: 1px solid rgba(255, 255, 255, .35);
+            border-radius: 999px;
+            font-size: .78rem;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            font-weight: 750;
+        }
+
+        h1 {
+            max-width: 760px;
+            font-size: clamp(2.1rem, 5vw, 3.65rem);
+            line-height: 1.08;
+            margin: 18px 0 16px;
+            letter-spacing: -.04em;
+        }
+
+        .hero p {
+            max-width: 720px;
+            color: #e3f7f2;
+            font-size: 1.1rem;
+            margin: 0;
+        }
+
+        main {
+            padding: 34px 22px 64px;
+        }
+
+        section {
+            margin: 0 0 42px;
+        }
+
+        h2 {
+            font-size: clamp(1.5rem, 3vw, 2rem);
+            line-height: 1.2;
+            letter-spacing: -.025em;
+            margin: 0 0 10px;
+        }
+
+        .intro {
+            color: var(--muted);
+            margin: 0 0 22px;
+            max-width: 800px;
+        }
+
+        .principle {
+            border-left: 4px solid var(--brand);
+            background: var(--soft);
+            padding: 18px 20px;
+            border-radius: 0 12px 12px 0;
+            margin: 22px 0 0;
+        }
+
+        .scripts {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 21px;
+            box-shadow: 0 5px 20px rgba(17, 54, 46, .035);
+            break-inside: avoid;
+        }
+
+        .card h3 {
+            margin: 0 0 7px;
+            font-size: 1.13rem;
+            line-height: 1.3;
+        }
+
+        .when {
+            color: var(--muted);
+            font-size: .9rem;
+            margin: 0 0 13px;
+        }
+
+        .script {
+            background: #f7faf9;
+            border: 1px solid #e7efec;
+            border-radius: 10px;
+            padding: 14px;
+            margin: 0;
+        }
+
+        .tag {
+            display: inline-block;
+            color: var(--brand-dark);
+            background: var(--accent);
+            border-radius: 999px;
+            padding: 3px 9px;
+            font-size: .75rem;
+            font-weight: 750;
+            margin-bottom: 10px;
+        }
+
+        .steps {
+            display: grid;
+            gap: 12px;
+        }
+
+        .step {
+            display: grid;
+            grid-template-columns: 48px 1fr;
+            gap: 15px;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 18px;
+        }
+
+        .number {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            border-radius: 12px;
+            background: var(--soft);
+            color: var(--brand-dark);
+            font-weight: 850;
+        }
+
+        .step h3 {
+            margin: 0 0 3px;
+            font-size: 1.05rem;
+        }
+
+        .step p {
+            margin: 0;
+        }
+
+        .small {
+            color: var(--muted);
+            font-size: .92rem;
+        }
+
+        .tips {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .tip {
+            padding: 16px;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+        }
+
+        .tip strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .closing {
+            background: #073f39;
+            color: white;
+            border-radius: 18px;
+            padding: 26px;
+        }
+
+        .closing h2 {
+            color: white;
+        }
+
+        .closing p {
+            color: #e0f3ee;
+            margin-bottom: 0;
+        }
+
+        footer {
+            padding: 0 22px 28px;
+            color: var(--muted);
+            font-size: .85rem;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            max-width: 1040px;
+            margin: 0 auto;
+            padding: 14px 22px 0;
+        }
+
+        button {
+            appearance: none;
+            border: 0;
+            border-radius: 9px;
+            padding: 10px 14px;
+            background: var(--brand);
+            color: #fff;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: var(--brand-dark);
+        }
+
+        a {
+            color: var(--brand-dark);
+        }
+
+        @media (max-width: 720px) {
+
+            .scripts,
+            .tips {
+                grid-template-columns: 1fr;
+            }
+
+            .hero {
+                padding: 44px 22px 38px;
+            }
+
+            main {
+                padding-top: 26px;
+            }
+        }
+
+        @media print {
+            body {
+                background: white;
+                font-size: 10pt;
+            }
+
+            .toolbar {
+                display: none;
+            }
+
+            .hero {
+                padding: 34px 28px;
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+
+            main {
+                padding: 24px 0;
+            }
+
+            .card,
+            .step,
+            .tip,
+            .principle,
+            .closing {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+
+            .scripts {
+                gap: 10px;
+            }
+
+            .card {
+                padding: 14px;
+                box-shadow: none;
+            }
+
+            section {
+                margin-bottom: 26px;
+            }
+
+            a {
+                color: inherit;
+                text-decoration: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="toolbar">
+        <button type="button" onclick="window.print()">Imprimir / salvar em PDF</button>
+    </div>
+
+    <header class="hero">
+        <div class="hero-inner">
+            <span class="eyebrow">Manual de atendimento</span>
+            <h1>Playbook de ligações de follow-up</h1>
+            <p>12 roteiros prontos para clínicas odontológicas retomarem contatos, entenderem objeções e transformarem
+                interesse em avaliações agendadas — com naturalidade, clareza e respeito ao paciente.</p>
+        </div>
+    </header>
+
+    <main>
+        <section>
+            <h2>A lógica por trás de uma boa ligação</h2>
+            <p class="intro">O follow-up não deve ser apenas uma pergunta sobre o interesse do paciente. Cada ligação
+                precisa ter um motivo claro, recuperar o contexto da conversa e facilitar o próximo passo.</p>
+            <div class="principle"><strong>Princípio central:</strong> apresente um motivo verdadeiro para entrar em
+                contato, faça uma pergunta fácil de responder e conduza a conversa para uma ação concreta — como
+                esclarecer uma dúvida ou escolher um horário.</div>
+        </section>
+
+        <section>
+            <h2>12 estratégias de ligação</h2>
+            <p class="intro">Personalize os campos entre colchetes antes de ligar. Mencione apenas informações que
+                correspondam ao histórico real do paciente.</p>
+            <div class="scripts">
+                <article class="card">
+                    <span class="tag">Agendamento</span>
+                    <h3>1. A vaga que acabou de abrir</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente demonstrou interesse, mas ainda não agendou.
+                    </p>
+                    <p class="script">“Olá, [nome], tudo bem? Aqui é [atendente], da [clínica]. Estou te ligando porque
+                        surgiu um horário disponível amanhã pela manhã e lembrei que você tinha interesse em
+                        [tratamento]. Esse horário poderia funcionar para você? Posso reservar em seu nome?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>2. O contato que ficou pendente</h3>
+                    <p class="when"><strong>Quando usar:</strong> pediu informações e depois parou de responder.</p>
+                    <p class="script">“Oi, [nome], tudo bem? Nós conversamos há alguns dias sobre [tratamento], e estou
+                        retomando nosso contato para saber se você conseguiu avaliar com calma. Ficou alguma dúvida que
+                        eu possa esclarecer para te ajudar a dar o próximo passo?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>3. A avaliação como primeiro passo</h3>
+                    <p class="when"><strong>Quando usar:</strong> pessoa interessada em implante, prótese ou
+                        reabilitação oral.</p>
+                    <p class="script">“Olá, [nome]! Estou entrando em contato porque podemos organizar sua avaliação
+                        para entender melhor o que você precisa e quais possibilidades de tratamento existem no seu
+                        caso. Você prefere verificar um horário pela manhã ou à tarde?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>4. Descobrir o que impede o agendamento</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente interessado que ainda não tomou uma decisão.
+                    </p>
+                    <p class="script">“Oi, [nome], tudo bem? Quero facilitar para você. Quando conversamos sobre
+                        [tratamento], você demonstrou interesse, mas não chegamos a marcar. O que está pesando mais
+                        neste momento: encontrar um horário, entender melhor o tratamento ou avaliar as condições de
+                        pagamento?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>5. A agenda da semana</h3>
+                    <p class="when"><strong>Quando usar:</strong> leads recentes que ainda não escolheram uma data.</p>
+                    <p class="script">“Oi, [nome]! Estou organizando os agendamentos desta semana aqui na [clínica] e
+                        queria saber se você gostaria de aproveitar para marcar sua avaliação. Temos estas opções
+                        disponíveis: [dia e horário] ou [dia e horário]. Qual funciona melhor para você?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>6. Retomar o objetivo do paciente</h3>
+                    <p class="when"><strong>Quando usar:</strong> pessoa procurou a clínica por uma necessidade
+                        específica.</p>
+                    <p class="script">“Olá, [nome]! Quando você entrou em contato, comentou que gostaria de resolver a
+                        questão de [necessidade relatada]. Estou ligando para saber se você ainda deseja avaliar as
+                        possibilidades de tratamento. Podemos encontrar um horário para você conversar com o dentista?”
+                    </p>
+                </article>
+
+                <article class="card">
+                    <h3>7. Conversa sobre condições de pagamento</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente demonstrou interesse, mas hesitou ao falar de
+                        preço.</p>
+                    <p class="script">“Oi, [nome], tudo bem? Queria retomar nossa conversa para entender se as condições
+                        que apresentamos ficaram adequadas para você. Se o investimento ainda for uma preocupação,
+                        podemos verificar quais alternativas de pagamento a clínica oferece. Você gostaria de conversar
+                        sobre isso?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>8. A dúvida que ficou para trás</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente recebeu orçamento, mas não avançou.</p>
+                    <p class="script">“Olá, [nome]! Aqui é [atendente], da [clínica]. Estou retomando seu atendimento
+                        porque queria ter certeza de que você recebeu todas as informações sobre [tratamento]. Ficou
+                        alguma dúvida sobre as etapas, o tempo de tratamento ou os valores?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>9. A ligação de conveniência</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente disse que está sem tempo.</p>
+                    <p class="script">“Oi, [nome]! Sei que a rotina é corrida, então quero facilitar. Posso verificar os
+                        horários disponíveis e encontrar uma opção que encaixe na sua agenda. Para você, costuma ser
+                        melhor antes do almoço ou no período da tarde?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>10. Acompanhamento sem pressão</h3>
+                    <p class="when"><strong>Quando usar:</strong> lead ainda está pesquisando e comparando clínicas.</p>
+                    <p class="script">“Oi, [nome], tudo bem? Estou passando para saber como está sua decisão sobre
+                        [tratamento]. Você ainda está pesquisando as opções ou já conseguiu resolver? Pergunto para
+                        entender como podemos te ajudar, sem tomar mais do seu tempo.”</p>
+                </article>
+
+                <article class="card">
+                    <h3>11. O agendamento não concluído</h3>
+                    <p class="when"><strong>Quando usar:</strong> paciente quase marcou, mas a conversa terminou sem
+                        confirmação.</p>
+                    <p class="script">“Olá, [nome]! Na nossa última conversa, faltou apenas definirmos o melhor horário
+                        para sua avaliação. Quero facilitar isso para você. Se ainda tiver interesse, podemos concluir o
+                        agendamento agora. Você prefere [opção A] ou [opção B]?”</p>
+                </article>
+
+                <article class="card">
+                    <h3>12. Encerramento do acompanhamento</h3>
+                    <p class="when"><strong>Quando usar:</strong> não responde após várias tentativas.</p>
+                    <p class="script">“Oi, [nome], tudo bem? Aqui é [atendente], da [clínica]. Estou fazendo meu último
+                        contato sobre o atendimento que você solicitou para [tratamento]. Não quero insistir caso não
+                        seja o momento certo. Você gostaria que continuássemos buscando um horário para você ou prefere
+                        deixar para outra ocasião?”</p>
+                </article>
+            </div>
+        </section>
+
+        <section>
+            <h2>Cadência sugerida de follow-up</h2>
+            <p class="intro">Use esta sequência como ponto de partida e adapte a frequência ao histórico do lead, ao
+                volume de contatos e às preferências que a pessoa manifestar.</p>
+            <div class="steps">
+                <div class="step">
+                    <div class="number">01</div>
+                    <div>
+                        <h3>Lead novo</h3>
+                        <p class="small">Preferencialmente no mesmo dia.</p>
+                        <p>Entenda a necessidade, confirme o interesse e proponha a avaliação. Priorize os roteiros 1, 3
+                            e 5.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="number">02</div>
+                    <div>
+                        <h3>Interessado sem agendamento</h3>
+                        <p class="small">Após cerca de 1 dia útil.</p>
+                        <p>Identifique a objeção antes de argumentar e ofereça uma solução concreta. Use os roteiros 4,
+                            7 e 8.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="number">03</div>
+                    <div>
+                        <h3>Lead que esfriou</h3>
+                        <p class="small">Após 3 a 5 dias úteis, conforme o histórico.</p>
+                        <p>Retome o objetivo original e facilite a escolha de horário. Use os roteiros 2, 6 e 10.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="number">04</div>
+                    <div>
+                        <h3>Última tentativa</h3>
+                        <p class="small">Depois de algumas tentativas sem resposta.</p>
+                        <p>Encerre o ciclo com educação, sem pressionar, e deixe o caminho aberto para um retorno
+                            futuro. Use o roteiro 12.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>5 técnicas para aumentar a conversão</h2>
+            <div class="tips">
+                <div class="tip"><strong>1. Ofereça duas opções</strong>“Prefere terça às 10h ou quarta às 15h?”
+                    Facilite a resposta e use somente horários realmente disponíveis.</div>
+                <div class="tip"><strong>2. Use o histórico do lead</strong>Mencione o tratamento ou a dúvida que a
+                    pessoa relatou. Evite conversas genéricas que parecem uma ligação automática.</div>
+                <div class="tip"><strong>3. Pergunte antes de argumentar</strong>Se a pessoa não marcou, descubra o
+                    motivo antes de tentar convencê-la.</div>
+                <div class="tip"><strong>4. Peça uma decisão pequena</strong>Confirme o interesse, escolha o horário e,
+                    em seguida, confirme os dados do agendamento.</div>
+                <div class="tip"><strong>5. Não crie falsa escassez</strong>Diga que surgiu um horário apenas quando
+                    isso realmente aconteceu. Não invente vagas, descontos ou prazos.</div>
+            </div>
+        </section>
+
+        <section class="closing">
+            <h2>Checklist antes de encerrar a ligação</h2>
+            <p>✓ Confirme o nome e o tratamento de interesse.<br>
+                ✓ Responda às dúvidas sem prometer resultados clínicos.<br>
+                ✓ Confirme dia, horário e endereço, se o agendamento for realizado.<br>
+                ✓ Registre no CRM o resultado da ligação e o próximo passo.<br>
+
+        </section>
+    </main>
+
+    <footer>
+        Material de apoio para equipes de atendimento odontológico. Os roteiros devem ser adaptados ao histórico real do
+        paciente, às regras da clínica e à disponibilidade efetiva da agenda.
+    </footer>
+</body>
+
+</html>

@@ -85,6 +85,33 @@ async def main():
         check("outra usuária não vê", (await http.get("/api/forms", headers=outra)).json() == [])
         check("outra usuária não abre por id", (await http.get(f"/api/forms/{f['id']}/responses", headers=outra)).status_code == 404)
 
+        print("teste de aviso")
+        enviados = []
+
+        async def fake_send(cfg, to, text):
+            enviados.append((to, text))
+            return {}
+
+        from app.services import evolution
+        real_send, evolution.send_text = evolution.send_text, fake_send
+        tn = {"wa_number_id": A, "phone": "31 97777-6666", "title": "Captação Implante", "fields": body["fields"]}
+        r = await http.post("/api/forms/test-notify", headers=nic, json=tn)
+        check("teste de aviso enviado", r.status_code == 200 and len(enviados) == 1, r.text)
+        check("vai pro número digitado", enviados and enviados[0][0] == "5531977776666", enviados)
+        check("mensagem de teste com exemplo", enviados and "Teste de aviso" in enviados[0][1] and "Quando?: Já" in enviados[0][1], enviados)
+        r = await http.post("/api/forms/test-notify", headers=nic, json={**tn, "phone": "123"})
+        check("número curto: recusa", r.status_code == 400, r.text)
+        r = await http.post("/api/forms/test-notify", headers=nic, json={**tn, "wa_number_id": B})
+        check("linha de outro cliente: recusa", r.status_code == 404, r.status_code)
+
+        async def broken_send(cfg, to, text):
+            raise RuntimeError("instância desconectada")
+
+        evolution.send_text = broken_send
+        r = await http.post("/api/forms/test-notify", headers=nic, json=tn)
+        check("falha da instância aparece na tela", r.status_code == 502 and "desconectada" in r.json()["detail"], r.text)
+        evolution.send_text = real_send
+
         print("página pública")
         p = (await http.get(f"/api/forms/public/{slug}")).json()
         check("público sem login", p["headline"] == "Avaliação gratuita")
@@ -99,6 +126,26 @@ async def main():
                                                "utm": {"source": "google", "medium": "cpc", "campaign": "implante"}}, None, None))
             await s.commit()
 
+        print("preenchimento abandonado")
+        part = lambda sid, answers, step, **kw: http.post(
+            f"/api/forms/public/{slug}/partial", json={"sid": sid, "answers": answers, "step": step, **kw})
+        r = await part("visita-vazia-1", {}, 0)
+        check("rascunho vazio não grava", r.json()["saved"] is False, r.text)
+        r = await part("x", {"nome": "Zé"}, 1)
+        check("sid inválido não grava", r.json()["saved"] is False, r.text)
+        r = await http.post(f"/api/forms/public/{slug}/partial", content='{"sid":"visita-jose-1","answers":{"nome":"José"},"step":1}',
+                            headers={"Content-Type": "text/plain"})
+        check("aceita sendBeacon (text/plain)", r.json()["saved"] is True, r.text)
+        await part("visita-jose-1", {"nome": "José", "zap": "3199", "intruso": "x"}, 2)
+        await part("visita-maria-1", {"nome": "Maria"}, 1, tl=TL)
+        pl = (await http.get(f"/api/forms/{f['id']}/partials", headers=nic)).json()
+        jose = next((p for p in pl if p["answers"].get("nome") == "José"), None)
+        check("dois abandonos listados", len(pl) == 2, pl)
+        check("rascunho atualizado, sem campo desconhecido", jose and jose["answers"] == {"nome": "José", "zap": "3199"} and jose["step"] == 2, jose)
+        check("outra usuária não vê abandonos", (await http.get(f"/api/forms/{f['id']}/partials", headers=outra)).status_code == 404)
+        lst = (await http.get("/api/forms", headers=nic)).json()
+        check("contador de abandonos", lst[0]["partials"] == 2, lst[0].get("partials"))
+
         sub = lambda answers, **kw: http.post(f"/api/forms/public/{slug}/submit", json={"answers": answers, **kw})
         r = await sub({"nome": "Maria", "zap": "(31) 98888-7777", "quando": "Já"})
         check("sem consentimento: recusa", r.status_code == 400 and "consentimento" in r.json()["detail"], r.text)
@@ -108,7 +155,8 @@ async def main():
         check("opção fora da lista: recusa", r.status_code == 400, r.text)
         r = await sub({"nome": "Robô"}, website="spam")
         check("honeypot finge sucesso", r.status_code == 200)
-        r = await sub({"nome": "Maria", "zap": "(31) 98888-7777", "quando": "Já", "mail": "maria@x.com"}, consent=True, tl=TL)
+        r = await sub({"nome": "Maria", "zap": "(31) 98888-7777", "quando": "Já", "mail": "maria@x.com"}, consent=True, tl=TL,
+                      sid="visita-maria-1")
         out = r.json()
         check("envio aceito", r.status_code == 200 and out["ok"], r.text)
         check("redireciona pro WhatsApp com o tl", out["redirect_url"].startswith("https://wa.me/5531999990000") and "tl%3D" in out["redirect_url"], out["redirect_url"])
@@ -129,6 +177,12 @@ async def main():
         check("respostas no painel do contato", cr[0]["form_title"] == "Captação Implante" and len(cr[0]["answers"]) == 4, cr)
         lst = (await http.get("/api/forms", headers=nic)).json()
         check("contador de visitas e leads", lst[0]["views"] == 1 and lst[0]["responses"] == 1, (lst[0]["views"], lst[0]["responses"]))
+        pl = (await http.get(f"/api/forms/{f['id']}/partials", headers=nic)).json()
+        check("quem enviou sai dos abandonos", len(pl) == 1 and pl[0]["answers"]["nome"] == "José", pl)
+        r = await part("visita-maria-1", {"nome": "Maria"}, 1)
+        check("salvamento atrasado não reabre", r.json()["saved"] is False, r.text)
+        r = await http.delete(f"/api/forms/{f['id']}/partials/{pl[0]['id']}", headers=nic)
+        check("apaga abandono", r.status_code == 204 and (await http.get(f"/api/forms/{f['id']}/partials", headers=nic)).json() == [])
         ev = (await http.get(f"/api/journeys/{TL}", headers=nic)).json()
         check("form_submit na linha do tempo da jornada", any(e["event_name"] == "form_submit" for e in ev["events"]))
 

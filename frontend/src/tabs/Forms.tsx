@@ -26,7 +26,7 @@ export default function Forms() {
   const { numbers, numberId } = useNumber()
   const [forms, setForms] = useState<LeadForm[]>([])
   const [editing, setEditing] = useState<LeadForm | 'new' | null>(null)
-  const [viewing, setViewing] = useState<LeadForm | null>(null)
+  const [viewing, setViewing] = useState<{ form: LeadForm; tab: 'responses' | 'partials' } | null>(null)
   const [copied, setCopied] = useState(0)
   const [q, setQ] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
@@ -75,7 +75,11 @@ export default function Forms() {
   }, [forms, q])
 
   const totais = useMemo(
-    () => forms.reduce((a, f) => ({ views: a.views + f.views, leads: a.leads + f.responses }), { views: 0, leads: 0 }),
+    () =>
+      forms.reduce(
+        (a, f) => ({ views: a.views + f.views, leads: a.leads + f.responses, partials: a.partials + f.partials }),
+        { views: 0, leads: 0, partials: 0 },
+      ),
     [forms],
   )
 
@@ -86,7 +90,7 @@ export default function Forms() {
           Páginas de captação para as campanhas, publicadas em{' '}
           <span className="font-mono text-ink-300">{window.location.host}/f/…</span> — as respostas viram conversas no CRM
           da linha, com a jornada da campanha ligada.
-          {forms.length > 0 && ` ${totais.views} visitas · ${totais.leads} leads.`}
+          {forms.length > 0 && ` ${totais.views} visitas · ${totais.leads} leads · ${totais.partials} incompletos.`}
         </p>
         <div className="flex items-center gap-2">
           {forms.length > 3 && (
@@ -192,7 +196,7 @@ export default function Forms() {
                   </button>
                 </div>
 
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <div className="mt-3 grid grid-cols-4 gap-2 text-center">
                   <div className="rounded-lg bg-ink-950/50 py-2">
                     <div className="font-mono text-sm font-bold text-ink-100">{f.views}</div>
                     <div className="text-[9px] uppercase text-ink-500">Visitas</div>
@@ -201,6 +205,14 @@ export default function Forms() {
                     <div className="font-mono text-sm font-bold text-wa-500">{f.responses}</div>
                     <div className="text-[9px] uppercase text-ink-500">Leads</div>
                   </div>
+                  <button
+                    onClick={() => setViewing({ form: f, tab: 'partials' })}
+                    title="Começaram a preencher e não enviaram"
+                    className="rounded-lg bg-ink-950/50 py-2 hover:bg-white/5"
+                  >
+                    <div className="font-mono text-sm font-bold text-amber-300">{f.partials}</div>
+                    <div className="text-[9px] uppercase text-ink-500">Incompletos</div>
+                  </button>
                   <div className="rounded-lg bg-ink-950/50 py-2">
                     <div className="font-mono text-sm font-bold text-wa-400">{conv.toFixed(0)}%</div>
                     <div className="text-[9px] uppercase text-ink-500">Conversão</div>
@@ -215,7 +227,7 @@ export default function Forms() {
                     <Settings2 className="size-3.5" /> Configurar
                   </button>
                   <button
-                    onClick={() => setViewing(f)}
+                    onClick={() => setViewing({ form: f, tab: 'responses' })}
                     className="inline-flex items-center gap-1 rounded-md border border-ink-700 px-2 py-1.5 text-xs text-ink-200 hover:bg-white/5"
                   >
                     <Inbox className="size-3.5" /> Respostas
@@ -288,7 +300,16 @@ export default function Forms() {
           }}
         />
       )}
-      {viewing && <FormResponsesModal form={viewing} onClose={() => setViewing(null)} />}
+      {viewing && (
+        <FormResponsesModal
+          form={viewing.form}
+          initialTab={viewing.tab}
+          onClose={() => {
+            setViewing(null)
+            load()
+          }}
+        />
+      )}
     </div>
   )
 }
