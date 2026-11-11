@@ -200,6 +200,13 @@ async def require_admin(user: User = Depends(require_user)) -> User:
     return user
 
 
+async def require_super(user: User = Depends(require_admin)) -> User:
+    """Tela de super admin: so o dono da plataforma (admin com `is_super`)."""
+    if not user.is_super:
+        raise HTTPException(status_code=403, detail="Área restrita ao super admin.")
+    return user
+
+
 # --- bootstrap ---------------------------------------------------------------
 
 async def ensure_bootstrap_user(session: AsyncSession) -> None:
@@ -212,6 +219,7 @@ async def ensure_bootstrap_user(session: AsyncSession) -> None:
         name=BOOTSTRAP_USER,
         password_hash=hash_password(BOOTSTRAP_PASSWORD),
         role="admin",
+        is_super=True,
     )
     session.add(user)
     await session.commit()
@@ -226,6 +234,33 @@ async def ensure_bootstrap_user(session: AsyncSession) -> None:
             "Defina ADMIN_PASSWORD no .env antes de expor esta instalacao na internet.",
             DEFAULT_PASSWORD,
         )
+
+
+async def ensure_super_admin(session: AsyncSession) -> None:
+    """Base que ja existia antes do super admin ganha um: senao ninguem abre a tela.
+
+    Vale o usuario de ADMIN_USER se ele for admin ativo; sem ele, o admin ativo
+    mais antigo. Com algum super ja marcado, nao mexe em nada.
+    """
+    has_super = (
+        await session.execute(
+            select(func.count(User.id)).where(User.is_super.is_(True), User.active.is_(True))
+        )
+    ).scalar_one()
+    if has_super:
+        return
+    admins = (
+        await session.execute(
+            select(User).where(User.role == "admin", User.active.is_(True)).order_by(User.id)
+        )
+    ).scalars().all()
+    if not admins:
+        return
+    wanted = BOOTSTRAP_USER.strip().lower()
+    chosen = next((u for u in admins if u.username.lower() == wanted), admins[0])
+    chosen.is_super = True
+    await session.commit()
+    log.warning("usuario '%s' promovido a super admin (nenhum existia)", chosen.username)
 
 
 # --- forca bruta -------------------------------------------------------------

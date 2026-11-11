@@ -49,7 +49,7 @@ function LinePicker({
 
 /** Cadastro de quem entra no painel. Só admin chega aqui (o backend confere de novo). */
 export default function Users() {
-  const { user: me } = useAuth()
+  const { user: me, isSuper } = useAuth()
   const [rows, setRows] = useState<AuthUser[]>([])
   const [form, setForm] = useState({ ...BLANK })
   const [busy, setBusy] = useState(false)
@@ -127,6 +127,7 @@ export default function Users() {
                     <p className="flex items-center gap-2 text-sm text-ink-100">
                       {u.name || u.username}
                       {u.id === me?.id && <span className="text-[11px] text-ink-500">(você)</span>}
+                      {u.is_super && <Badge tone="info">super admin</Badge>}
                       {!u.active && <Badge tone="warn">inativo</Badge>}
                     </p>
                     <p className="mt-0.5 text-[11px] text-ink-500">
@@ -148,6 +149,20 @@ export default function Users() {
                         <option value="admin">admin</option>
                       </Select>
                     </div>
+                    {isSuper && u.role === 'admin' && u.id !== me?.id && (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(
+                            () => authApi.patchUser(u.id, { is_super: !u.is_super }),
+                            u.is_super ? 'Deixou de ser super admin.' : 'Agora é super admin.',
+                          )
+                        }
+                      >
+                        {u.is_super ? 'tirar super' : 'tornar super'}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       disabled={busy}

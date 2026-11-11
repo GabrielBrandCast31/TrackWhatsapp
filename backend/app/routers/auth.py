@@ -31,6 +31,7 @@ def serialize(user: User) -> dict:
         "username": user.username,
         "name": user.name,
         "role": user.role,
+        "is_super": bool(user.is_super),
         "active": user.active,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
@@ -67,6 +68,8 @@ class UserPatch(BaseModel):
     active: bool | None = None
     password: str | None = None
     number_ids: list[int] | None = None
+    # so um super admin promove/rebaixa outro
+    is_super: bool | None = None
 
 
 async def _valid_numbers(session: AsyncSession, ids: list[int]) -> list[int]:
@@ -196,6 +199,22 @@ async def _admins_left(session: AsyncSession, excluding: int) -> int:
     return (await session.execute(stmt)).scalar_one()
 
 
+async def _supers_left(session: AsyncSession, excluding: int) -> int:
+    stmt = select(func.count(User.id)).where(
+        User.is_super.is_(True), User.active.is_(True), User.id != excluding
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+
+LAST_SUPER = "Este é o último super admin ativo — promova outro antes."
+
+
+def _guard_super(actor: User, target: User) -> None:
+    """Admin comum nao troca a senha do dono nem o rebaixa: seria subir de nivel."""
+    if target.is_super and not actor.is_super:
+        raise HTTPException(status_code=403, detail="Só um super admin altera outro super admin.")
+
+
 @router.patch("/users/{user_id}")
 async def patch_user(
     user_id: int,
@@ -207,9 +226,22 @@ async def patch_user(
     if user is None:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
+    _guard_super(admin, user)
     data = payload.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="Perfil inválido: use 'admin' ou 'user'.")
+
+    if data.get("is_super") is not None and not admin.is_super:
+        raise HTTPException(status_code=403, detail="Só um super admin define quem é super admin.")
+    will_be_admin = data.get("role", user.role) == "admin"
+    if data.get("is_super") and not will_be_admin:
+        raise HTTPException(status_code=400, detail="Super admin precisa ter perfil admin.")
+    # super que deixa de ser admin, de estar ativo ou de ser super
+    loses_super = user.is_super and (
+        data.get("is_super") is False or not will_be_admin or data.get("active") is False
+    )
+    if loses_super and not await _supers_left(session, user.id):
+        raise HTTPException(status_code=400, detail=LAST_SUPER)
 
     # rebaixar/desativar o ultimo admin tranca todo mundo pra fora do cadastro
     loses_admin = (data.get("role") == "user" and user.role == "admin") or data.get("active") is False
@@ -232,6 +264,10 @@ async def patch_user(
         user.role = data["role"]
     if "active" in data:
         user.active = bool(data["active"])
+    if data.get("is_super") is not None:
+        user.is_super = bool(data["is_super"])
+    if user.role != "admin":
+        user.is_super = False
     if data.get("number_ids") is not None:
         await access.set_numbers(session, user.id, await _valid_numbers(session, data["number_ids"]))
 
@@ -250,6 +286,9 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     if user.id == admin.id:
         raise HTTPException(status_code=400, detail="Você não pode apagar a própria conta.")
+    _guard_super(admin, user)
+    if user.is_super and not await _supers_left(session, user.id):
+        raise HTTPException(status_code=400, detail=LAST_SUPER)
     if user.role == "admin" and not await _admins_left(session, user.id):
         raise HTTPException(
             status_code=400, detail="Este é o último administrador ativo — promova outro antes."

@@ -97,6 +97,16 @@ export function IconShield(p: Props) {
   )
 }
 
+/** Super admin — coroa. */
+export function IconCrown(p: Props) {
+  return (
+    <Svg {...p}>
+      <path d="M4 8l4 4 4-7 4 7 4-4-1.5 10h-13L4 8Z" />
+      <path d="M6.5 21h11" />
+    </Svg>
+  )
+}
+
 export function IconChevronLeft(p: Props) {
   return (
     <Svg {...p}>

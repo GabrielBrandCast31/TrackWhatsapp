@@ -16,6 +16,8 @@ export type AuthUser = {
   username: string
   name: string | null
   role: 'admin' | 'user'
+  /** dono da plataforma: admin que também abre a tela de super admin */
+  is_super?: boolean
   active: boolean
   created_at: string
   last_login_at: string | null
@@ -1100,6 +1102,66 @@ export const authApi = {
   /** troca o token curto que voltou no fragmento pela sessão normal */
   facebookExchange: (token: string) =>
     request<TokenPair>('/api/meta/login/exchange', { method: 'POST', body: JSON.stringify({ token }) }),
+}
+
+// --- super admin: todos os clientes + relatório no WhatsApp ---
+
+export type SuperLine = {
+  id: number
+  label: string
+  channel: 'evolution' | 'cloud'
+  instance: string | null
+  phone: string | null
+  profile_name: string | null
+  active: boolean
+  state: string | null
+  connected: boolean
+  last_error: string | null
+  last_checked_at: string | null
+  /** quem da operação enxerga esta linha */
+  users: string[]
+  leads_total: number
+  leads_today: number
+  leads_7d: number
+  last_message_at: string | null
+}
+
+export type SuperOverview = {
+  generated_at: string
+  lines: SuperLine[]
+  totals: {
+    lines: number
+    active: number
+    connected: number
+    disconnected: number
+    leads_today: number
+    leads_7d: number
+    leads_total: number
+  }
+}
+
+export type SuperSettings = {
+  /** só dígitos, com DDI */
+  report_phone: string
+  /** linha da Evolution que envia; null = primeira conectada */
+  sender_number_id: number | null
+  daily_enabled: boolean
+  daily_time: string
+  alert_on_disconnect: boolean
+  last_sent_at: string | null
+  last_error: string | null
+}
+
+export const superApi = {
+  overview: () => request<SuperOverview>('/api/superadmin/overview'),
+  settings: () => request<SuperSettings>('/api/superadmin/settings'),
+  saveSettings: (patch: Partial<SuperSettings>) =>
+    request<SuperSettings>('/api/superadmin/settings', { method: 'PUT', body: JSON.stringify(patch) }),
+  preview: () => request<{ text: string }>('/api/superadmin/report/preview'),
+  send: () =>
+    request<{ to: string; sender_label: string; settings: SuperSettings }>('/api/superadmin/report/send', {
+      method: 'POST',
+    }),
 }
 
 // --- conexão com o Facebook (OAuth) ---

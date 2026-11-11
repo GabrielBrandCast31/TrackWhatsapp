@@ -34,7 +34,7 @@ from sqlalchemy import func, select
 
 from app import auth, auto_sync
 from app import numbers as numbers_service
-from app import state_watch
+from app import state_watch, superadmin
 from app.db import SessionLocal, init_db
 from app.models import Contact, Conversion, Dispatch, KeywordRule, Outreach, Prospect, TrackingEvent
 from app.routers import attendance as attendance_router
@@ -52,6 +52,7 @@ from app.routers import meta as meta_router
 from app.routers import numbers as numbers_router
 from app.routers import prospecting as prospecting_router
 from app.routers import rules as rules_router
+from app.routers import superadmin as superadmin_router
 from app.routers import webhook as webhook_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -97,6 +98,9 @@ app.include_router(numbers_router.router, dependencies=_admin_only)
 app.include_router(numbers_router.lines_router, dependencies=_logged_in)
 app.include_router(prospecting_router.router, dependencies=_admin_only)
 
+# --- so o super admin: visao de todos os clientes + relatorio no WhatsApp ---
+app.include_router(superadmin_router.router, dependencies=[Depends(auth.require_super)])
+
 # --- publico: quem chama e a Evolution/Meta, autenticando pelo token da URL ou
 # pela assinatura do payload ---
 app.include_router(webhook_router.router)
@@ -113,6 +117,8 @@ async def on_startup() -> None:
     async with SessionLocal() as session:
         # base nova (ou vinda da versao sem login) precisa de alguem pra entrar
         await auth.ensure_bootstrap_user(session)
+        # base anterior ao super admin: alguem precisa conseguir abrir a tela
+        await auth.ensure_super_admin(session)
     async with SessionLocal() as session:
         # primeira subida em multi-numero: a config antiga vira o numero #1
         await numbers_service.seed_from_global_settings(session)
@@ -145,11 +151,13 @@ async def on_startup() -> None:
     # CRM e atribuicao sem depender do webhook: puxa conversa nova e acha o
     # anuncio na primeira mensagem, de tempos em tempos (veja app.auto_sync)
     app.state.auto_sync = asyncio.create_task(auto_sync.watch())
+    # relatorio diario e alerta de linha caida no WhatsApp do super admin
+    app.state.super_report = asyncio.create_task(superadmin.watch())
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    for name in ("state_watcher", "auto_sync"):
+    for name in ("state_watcher", "auto_sync", "super_report"):
         task = getattr(app.state, name, None)
         if task is not None:
             task.cancel()

@@ -19,6 +19,8 @@ type AuthState = {
   /** ainda checando o token guardado — evita piscar a tela de login no F5 */
   checking: boolean
   isAdmin: boolean
+  /** dono da plataforma — vê a tela de super admin */
+  isSuper: boolean
   login: (username: string, password: string) => Promise<void>
   logout: () => void
   setUser: (user: AuthUser) => void
@@ -81,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AuthState>(
-    () => ({ user, checking, isAdmin: user?.role === 'admin', login, logout, setUser, facebookError }),
+    () => ({ user, checking, isAdmin: user?.role === 'admin', isSuper: user?.role === 'admin' && !!user?.is_super, login, logout, setUser, facebookError }),
     [user, checking, login, logout, facebookError],
   )
 

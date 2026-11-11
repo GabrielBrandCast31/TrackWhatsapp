@@ -100,6 +100,8 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "password_changed_at": "TIMESTAMP",
         # "Entrar com Facebook": id vinculado pelo proprio usuario
         "facebook_id": "VARCHAR(64)",
+        # super admin (dono da plataforma)
+        "is_super": "BOOLEAN",
     },
 }
 
@@ -115,6 +117,7 @@ _BACKFILL: tuple[tuple[str, str, str], ...] = (
     # BOOLEAN: o literal precisa ser FALSE, nao 0 — o Postgres recusa o integer
     # (DatatypeMismatchError) e o SQLite aceita FALSE desde a 3.23.
     ("contacts", "last_message_from_me", "FALSE"),
+    ("users", "is_super", "FALSE"),
 )
 
 # indices unicos que deixaram de ser unicos ao virar multi-numero

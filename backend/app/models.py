@@ -817,6 +817,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(16), default="user")  # admin | user
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Dono da plataforma: um admin que alem de tudo enxerga a tela de super admin
+    # (visao de todos os clientes + relatorio no WhatsApp). So outro super mexe nele.
+    is_super: Mapped[bool] = mapped_column(Boolean, default=False)
     # id do Facebook (escopado pelo app) vinculado pelo proprio usuario logado.
     # So quem vinculou entra com "Entrar com Facebook" — o login nunca cria conta.
     facebook_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)

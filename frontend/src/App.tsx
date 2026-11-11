@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './authContext'
 import {
   IconBoard,
   IconCode,
+  IconCrown,
   IconForm,
   IconFunnel,
   IconMegaphone,
@@ -35,6 +36,7 @@ import Instances from './tabs/Instances'
 import Journeys from './tabs/Journeys'
 import Leads from './tabs/Leads'
 import SiteTag from './tabs/SiteTag'
+import SuperAdmin from './tabs/SuperAdmin'
 import Tracking from './tabs/Tracking'
 
 const TABS = [
@@ -52,6 +54,8 @@ const TABS = [
   { id: 'conversions', label: 'Conversões', hint: 'Envios ao Meta', Icon: IconTrending },
   // só admin: o backend recusa as rotas de dentro dela pra perfil de operação
   { id: 'admin', label: 'Admin', hint: 'Usuários e acessos', Icon: IconShield, adminOnly: true },
+  // só o dono da plataforma: todos os clientes e o relatório no WhatsApp
+  { id: 'superadmin', label: 'Super Admin', hint: 'Todos os clientes e relatório', Icon: IconCrown, superOnly: true },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -134,8 +138,10 @@ function Shell() {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [menuOpen, setMenuOpen] = useState(false)
   const { numberId } = useNumber()
-  const { user, isAdmin } = useAuth()
-  const tabs = TABS.filter((t) => isAdmin || !('adminOnly' in t && t.adminOnly))
+  const { user, isAdmin, isSuper } = useAuth()
+  const tabs = TABS.filter(
+    (t) => (isAdmin || !('adminOnly' in t && t.adminOnly)) && (isSuper || !('superOnly' in t && t.superOnly)),
+  )
   const active = tabs.find((t) => t.id === tab) ?? tabs[0]
 
   const refresh = useCallback(() => {
@@ -220,7 +226,8 @@ function Shell() {
               </div>
             </div>
 
-            {stats && (
+            {/* a tela de super admin tem os próprios números, de todas as linhas */}
+            {stats && active.id !== 'superadmin' && (
               <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                 <Stat label="Jornadas no site" value={stats.journeys ?? 0} />
                 <Stat label="Cliques no WhatsApp" value={stats.whatsapp_clicks ?? 0} />
@@ -244,6 +251,7 @@ function Shell() {
             {tab === 'leads' && <Leads onChanged={refresh} />}
             {tab === 'conversions' && <Conversions onChanged={refresh} />}
             {tab === 'admin' && isAdmin && <Admin onChanged={refresh} />}
+            {tab === 'superadmin' && isSuper && <SuperAdmin />}
           </div>
         </main>
       </div>
