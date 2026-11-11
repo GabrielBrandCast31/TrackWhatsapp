@@ -4,9 +4,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle, ArrowDown, ArrowUp, Bell, Check, ChevronDown, ChevronsDownUp,
-  ChevronsUpDown, Copy, Crosshair, Eye, EyeOff, HelpCircle, ImageIcon,
+  ChevronsUpDown, Copy, Crosshair, Eye, EyeOff, ImageIcon,
   Keyboard, Layers, ListChecks, Loader2, MonitorPlay, Palette, Plus, Search, Settings2,
-  Shield, Sparkles, Trash2, Upload, X,
+  Shield, Sparkles, Star, Trash2, Upload, X,
 } from './icons';
 import {
   createForm, testFormNotify, updateForm,
@@ -19,16 +19,20 @@ import {
   withAlpha,
 } from './formKit';
 import { FormAiModal } from './FormAiModal';
+import { Field, INPUT, SettingRow, Toggle } from './editorUi';
+import { SheetsPanel, validSheetsUrl } from './SheetsPanel';
+import { DEFAULT_QUALIFICATION, QualActions, QualCriteria, QualSimulator } from './QualificationPanel';
 
-type Cat = "geral" | "aparencia" | "perguntas" | "comportamento" | "notificacoes" | "integracoes";
+type Cat = "geral" | "aparencia" | "perguntas" | "qualificacao" | "comportamento" | "notificacoes" | "integracoes";
 
 const CATS: { id: Cat; label: string; icon: typeof Settings2; desc: string }[] = [
   { id: "geral", label: "Geral", icon: Settings2, desc: "Nome, linha, publicação e link" },
   { id: "aparencia", label: "Aparência", icon: Palette, desc: "Logo, cores, fonte e formas" },
   { id: "perguntas", label: "Perguntas", icon: ListChecks, desc: "Campos que o lead responde" },
+  { id: "qualificacao", label: "Qualificação", icon: Star, desc: "Critérios de lead qualificado e o evento QualifiedLead" },
   { id: "comportamento", label: "Comportamento", icon: MonitorPlay, desc: "Layout, capa e pós-envio" },
   { id: "notificacoes", label: "Notificações", icon: Bell, desc: "WhatsApp e webhook" },
-  { id: "integracoes", label: "Integrações", icon: Crosshair, desc: "Jornada, Pixel e Conversions API" },
+  { id: "integracoes", label: "Integrações", icon: Crosshair, desc: "Jornada, Pixel, Conversions API e Google Sheets" },
 ];
 
 interface Sec {
@@ -36,9 +40,6 @@ interface Sec {
   kw: string; body: ReactNode;
 }
 
-const INPUT = "w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm outline-none"
-  + " transition-colors placeholder:text-ink-600 focus:border-wa-500/70"
-  + " focus:ring-2 focus:ring-wa-500/20";
 
 export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose, onSaved }: {
   form: LeadForm | null;
@@ -64,6 +65,7 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
     logo_url: form?.logo_url || "",
     theme: { ...DEFAULT_THEME, ...(form?.theme || {}) } as LeadFormTheme,
     settings: { ...DEFAULT_SETTINGS, ...(form?.settings || {}) } as LeadFormSettings,
+    qualification: { ...DEFAULT_QUALIFICATION, ...(form?.qualification || {}) },
   });
   const [fields, setFields] = useState<LeadFormField[]>(
     form?.fields?.length ? form.fields
@@ -167,6 +169,9 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
     if (semOpcao >= 0) {
       setCat("perguntas");
       setErr(`A pergunta ${semOpcao + 1} precisa de pelo menos 2 opções.`); return;
+    }
+    if (d.settings.sheets_enabled && !validSheetsUrl(d.settings.sheets_url)) {
+      setCat("integracoes"); setErr("Cole a URL do app da Web do Apps Script (termina em /exec) ou desligue a planilha."); return;
     }
     if ((d.capi_token.trim() || form?.capi_token__set) && !d.pixel_id.trim()) {
       setCat("integracoes"); setErr("Para usar o token da CAPI, preencha também o ID do Pixel."); return;
@@ -426,6 +431,26 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       ),
     },
     {
+      id: "qual-criterios", cat: "qualificacao", icon: Star, title: "Critérios de qualificação",
+      desc: "Quais respostas fazem um lead ser qualificado",
+      kw: "qualificacao qualificado criterio regra lead bom mql pontuacao score orcamento",
+      body: <QualCriteria q={d.qualification} onChange={(v) => set("qualification", v)} fields={fields} />,
+    },
+    {
+      id: "qual-acoes", cat: "qualificacao", icon: Crosshair, title: "Quando o lead qualifica",
+      desc: "Evento QualifiedLead no Meta, etapa no CRM e aviso",
+      kw: "qualifiedlead evento conversao meta capi pixel mql crm aviso qualificado",
+      body: <QualActions q={d.qualification} onChange={(v) => set("qualification", v)}
+        pixelReady={!!d.pixel_id.trim() && (!!d.capi_token.trim() || !!form?.capi_token__set)}
+        notifySet={!!d.whatsapp_notify.trim()} />,
+    },
+    {
+      id: "qual-simulacao", cat: "qualificacao", icon: Sparkles, title: "Testar e melhorar",
+      desc: "Rode os critérios nas respostas recebidas e veja qual pergunta separa o lead bom",
+      kw: "simular testar melhorar taxa qualificados distribuicao respostas reclassificar",
+      body: <QualSimulator formId={form?.id ?? null} q={d.qualification} fields={fields} />,
+    },
+    {
       id: "layout", cat: "comportamento", icon: MonitorPlay, title: "Layout e navegação",
       desc: "Como as perguntas são apresentadas ao lead",
       kw: "layout etapas typeform pagina unica capa progresso barra rodape marca",
@@ -580,6 +605,13 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       ),
     },
     {
+      id: "sheets", cat: "integracoes", icon: ListChecks, title: "Google Sheets",
+      desc: "Uma linha na planilha a cada resposta — opcional",
+      kw: "google sheets planilha excel apps script linha exportar integracao",
+      body: <SheetsPanel settings={d.settings} onChange={setCfg} lineId={d.wa_number_id}
+        title={d.title} fields={fields} />,
+    },
+    {
       id: "meta", cat: "integracoes", icon: Crosshair, title: "Rastreamento do Meta",
       desc: "Pixel no navegador e Conversions API no servidor",
       kw: "pixel meta facebook capi conversions api token evento lead rastreamento teste test event code",
@@ -690,7 +722,7 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
           </div>
 
           {/* categorias */}
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
             {CATS.map((c, i) => {
               const on = !q && c.id === cat;
               return (
@@ -774,6 +806,8 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
             <p className="text-xs text-ink-400">
               {fields.length} pergunta(s) · {d.settings.layout === "step" ? "uma por vez" : "página única"}
               {d.logo_url ? " · com logo" : ""}{d.active ? "" : " · pausado"}
+              {d.qualification.enabled ? ` · ${d.qualification.rules.length} regra(s) de qualificação` : ""}
+              {d.settings.sheets_enabled ? " · planilha ligada" : ""}
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -843,59 +877,6 @@ const PALETTES = [
 ];
 
 // ------------------------------- peças de UI -------------------------------
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? "bg-wa-500" : "bg-white/15"}`}>
-      <span className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${checked ? "left-[22px]" : "left-0.5"}`} />
-    </button>
-  );
-}
-
-function HelpDot({ text }: { text: string }) {
-  return (
-    <span className="group relative inline-flex">
-      <HelpCircle className="size-3.5 cursor-help text-ink-500" />
-      <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden w-56 -translate-x-1/2 rounded-lg border border-ink-700 bg-ink-850 px-2.5 py-2 text-[11px] leading-relaxed text-ink-100 shadow-xl group-hover:block">
-        {text}
-      </span>
-    </span>
-  );
-}
-
-/** Linha com rótulo + explicação à esquerda e o controle à direita. */
-function SettingRow({ label, hint, help, required, children }: {
-  label: string; hint?: string; help?: string; required?: boolean; children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3">
-      <div className="min-w-0">
-        <p className="flex items-center gap-1.5 text-sm font-semibold">
-          {label}{required && <span className="text-red-300">*</span>}
-          {help && <HelpDot text={help} />}
-        </p>
-        {hint && <p className="mt-0.5 text-xs leading-relaxed text-ink-400">{hint}</p>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-/** Campo empilhado (rótulo em cima, input embaixo). */
-function Field({ label, hint, required, children }: {
-  label: string; hint?: string; required?: boolean; children: ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3">
-      <p className="flex items-center gap-1.5 text-sm font-semibold">
-        {label}{required && <span className="text-red-300">*</span>}
-      </p>
-      {hint && <p className="mb-2 mt-0.5 text-xs leading-relaxed text-ink-400">{hint}</p>}
-      <div className={hint ? "" : "mt-2"}>{children}</div>
-    </div>
-  );
-}
-
 // ------------------------------ cartão de campo ----------------------------
 function FieldCard({ f, index, total, onPatch, onMove, onRemove, onDuplicate }: {
   f: LeadFormField; index: number; total: number;

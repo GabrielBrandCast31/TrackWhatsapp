@@ -1,13 +1,14 @@
 // Respostas de um formulário — busca, tabela por pergunta e exportação CSV.
 // A aba "Incompletos" lista quem começou a preencher e não enviou.
 import { useEffect, useMemo, useState } from "react";
-import { Download, Inbox, Loader2, Search, Trash2, X } from './icons';
+import { Check, Download, Inbox, Loader2, RotateCcw, Search, Trash2, X } from './icons';
 import {
-  deleteFormPartial, listFormPartials, listFormResponses,
+  deleteFormPartial, listFormPartials, listFormResponses, resendToSheets, setResponseQualification,
   type LeadForm, type LeadFormPartial, type LeadFormResponse,
 } from './client';
 
 type Tab = "responses" | "partials";
+type QFilter = "all" | "yes" | "no" | "none";
 
 export function FormResponsesModal({ form, onClose, initialTab = "responses" }: {
   form: LeadForm; onClose: () => void; initialTab?: Tab;
@@ -16,6 +17,30 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
   const [rows, setRows] = useState<LeadFormResponse[] | null>(null);
   const [partials, setPartials] = useState<LeadFormPartial[] | null>(null);
   const [q, setQ] = useState("");
+  const [qf, setQf] = useState<QFilter>("all");
+  const [saving, setSaving] = useState<number | null>(null);
+  const [qErr, setQErr] = useState("");
+
+  async function resend(r: LeadFormResponse) {
+    setSaving(r.id); setQErr("");
+    try {
+      const upd = await resendToSheets(form.id, r.id);
+      setRows((rs) => (rs || []).map((x) => (x.id === r.id ? upd : x)));
+      if (upd.sheets_status !== "sent") setQErr(upd.sheets_error || "A planilha recusou a linha.");
+    } catch (e) {
+      setQErr(e instanceof Error ? e.message : "Não foi possível reenviar.");
+    } finally { setSaving(null); }
+  }
+
+  async function classify(r: LeadFormResponse, value: boolean | null) {
+    setSaving(r.id); setQErr("");
+    try {
+      const upd = await setResponseQualification(form.id, r.id, value);
+      setRows((rs) => (rs || []).map((x) => (x.id === r.id ? upd : x)));
+    } catch (e) {
+      setQErr(e instanceof Error ? e.message : "Não foi possível salvar a classificação.");
+    } finally { setSaving(null); }
+  }
 
   useEffect(() => {
     listFormResponses(form.id).then((r) => setRows(r.responses)).catch(() => setRows([]));
@@ -30,9 +55,19 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
   const current = tab === "responses" ? rows : partials;
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t || !current) return current || [];
-    return current.filter((r) => Object.values(r.answers).join(" ").toLowerCase().includes(t));
-  }, [current, q]);
+    let list = current || [];
+    if (tab === "responses" && qf !== "all") {
+      list = (list as LeadFormResponse[]).filter((r) =>
+        qf === "yes" ? r.qualified === true : qf === "no" ? r.qualified === false : r.qualified == null);
+    }
+    if (!t) return list;
+    return list.filter((r) => Object.values(r.answers).join(" ").toLowerCase().includes(t));
+  }, [current, q, qf, tab]);
+  const qCount = useMemo(() => ({
+    yes: (rows || []).filter((r) => r.qualified === true).length,
+    no: (rows || []).filter((r) => r.qualified === false).length,
+    none: (rows || []).filter((r) => r.qualified == null).length,
+  }), [rows]);
 
   // onde a pessoa parou: a pergunta seguinte à última respondida
   const stoppedAt = (p: LeadFormPartial) => {
@@ -49,13 +84,13 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
   function exportCsv() {
     const cols = form.fields.map((f) => f.label);
     const cell = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const head = tab === "responses" ? ["Data", ...cols] : ["Última atividade", "Parou em", ...cols];
+    const head = tab === "responses" ? ["Data", "Qualificado", ...cols] : ["Última atividade", "Parou em", ...cols];
     const lines = [head.map(cell).join(";")];
     for (const r of filtered) {
       const when = tab === "responses" ? r.created_at : (r as LeadFormPartial).updated_at;
       lines.push([
         when ? new Date(when).toLocaleString("pt-BR") : "",
-        ...(tab === "partials" ? [stoppedAt(r as LeadFormPartial)] : []),
+        ...(tab === "partials" ? [stoppedAt(r as LeadFormPartial)] : [qualLabel((r as LeadFormResponse).qualified)]),
         ...form.fields.map((f) => r.answers[f.id] || ""),
       ].map(cell).join(";"));
     }
@@ -85,7 +120,7 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
           <div>
             <h2 className="text-lg font-semibold">Respostas — {form.title}</h2>
             <p className="text-sm text-ink-400">
-              {rows === null ? "Carregando…" : `${rows.length} resposta(s) · ${partials?.length ?? 0} incompleto(s) · ${form.views} visita(s)`}
+              {rows === null ? "Carregando…" : `${rows.length} resposta(s) · ${qCount.yes} qualificada(s) · ${partials?.length ?? 0} incompleto(s) · ${form.views} visita(s)`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -111,6 +146,20 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
           </div>
         </div>
 
+        {tab === "responses" && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-800 px-6 py-2">
+            {([["all", "Todas", rows?.length], ["yes", "Qualificadas", qCount.yes], ["no", "Não qualificadas", qCount.no],
+              ["none", "Sem classificação", qCount.none]] as const).map(([v, l, n]) => (
+              <button key={v} onClick={() => setQf(v)}
+                className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  qf === v ? "border-wa-500 bg-wa-500/15 text-ink-100" : "border-ink-700 text-ink-400 hover:bg-white/5"}`}>
+                {l}<span className="ml-1 font-mono opacity-70">{n ?? 0}</span>
+              </button>
+            ))}
+            {qErr && <span className="ml-2 text-[11px] text-red-300">{qErr}</span>}
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-6 py-4">
           {tab === "partials" && !!partials?.length && (
             <p className="text-xs leading-relaxed text-ink-500">
@@ -132,11 +181,48 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
               </p>
             </div>
           )}
-          {tab === "responses" && filtered.map((r) => (
-            <div key={r.id} className="rounded-xl border border-ink-800 bg-ink-950/50 p-4">
-              <p className="text-[11px] text-ink-400">
-                #{r.id} · {r.created_at ? new Date(r.created_at).toLocaleString("pt-BR") : ""}
-              </p>
+          {tab === "responses" && (filtered as LeadFormResponse[]).map((r) => (
+            <div key={r.id} className={`rounded-xl border bg-ink-950/50 p-4 ${
+              r.qualified === true ? "border-wa-500/40" : "border-ink-800"}`}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-ink-400">
+                  <span>#{r.id} · {r.created_at ? new Date(r.created_at).toLocaleString("pt-BR") : ""}</span>
+                  <QualBadge r={r} />
+                  <EventBadge r={r} />
+                  {r.sheets_status === "sent" && (
+                    <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">na planilha</span>
+                  )}
+                  {(r.sheets_status === "failed" || (r.sheets_status == null && form.settings.sheets_enabled)) && (
+                    <button onClick={() => void resend(r)} disabled={saving === r.id} title={r.sheets_error || "Enviar esta resposta para a planilha"}
+                      className={`rounded-md px-1.5 py-0.5 hover:underline ${r.sheets_status === "failed"
+                        ? "bg-red-500/10 text-red-300" : "bg-white/5 text-ink-400"}`}>
+                      {r.sheets_status === "failed" ? "planilha falhou · reenviar" : "enviar para a planilha"}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {saving === r.id && <Loader2 className="size-3.5 text-ink-400" />}
+                  <button disabled={saving === r.id} onClick={() => void classify(r, true)}
+                    title="Marcar como qualificado (dispara o evento se ainda não saiu)"
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                      r.qualified === true ? "border-wa-500 bg-wa-500/15 text-wa-500" : "border-ink-700 text-ink-400 hover:text-ink-100"}`}>
+                    <Check className="size-3" /> Qualificado
+                  </button>
+                  <button disabled={saving === r.id} onClick={() => void classify(r, false)}
+                    title="Marcar como não qualificado"
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                      r.qualified === false ? "border-red-400/60 bg-red-500/10 text-red-300" : "border-ink-700 text-ink-400 hover:text-ink-100"}`}>
+                    <X className="size-3" /> Não
+                  </button>
+                  {r.qualified_source === "manual" && (
+                    <button disabled={saving === r.id} onClick={() => void classify(r, null)}
+                      title="Voltar para a classificação automática (pelos critérios)"
+                      className="rounded-md p-1 text-ink-500 hover:text-ink-100">
+                      <RotateCcw className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
               <Answers form={form} answers={r.answers} />
             </div>
           ))}
@@ -175,4 +261,28 @@ function Answers({ form, answers }: { form: LeadForm; answers: Record<string, st
       ))}
     </dl>
   );
+}
+
+const qualLabel = (v: boolean | null) => (v === true ? "sim" : v === false ? "não" : "");
+
+function QualBadge({ r }: { r: LeadFormResponse }) {
+  if (r.qualified == null) return <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-ink-500">sem classificação</span>;
+  const src = r.qualified_source === "manual" ? "manual" : `automático${
+    r.qualification?.score ? ` · ${r.qualification.score} pt` : ""}`;
+  return r.qualified ? (
+    <span className="rounded-md bg-wa-500/15 px-1.5 py-0.5 font-semibold text-wa-500">✓ qualificado · {src}</span>
+  ) : (
+    <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-ink-300">não qualificado · {src}</span>
+  );
+}
+
+function EventBadge({ r }: { r: LeadFormResponse }) {
+  if (!r.ql_event_status) return null;
+  const map = {
+    sent: ["evento enviado ao Meta", "bg-sky-500/10 text-sky-300"],
+    failed: ["evento falhou", "bg-red-500/10 text-red-300"],
+    skipped: ["evento não enviado", "bg-amber-500/10 text-amber-300"],
+  } as const;
+  const [label, cls] = map[r.ql_event_status];
+  return <span className={`rounded-md px-1.5 py-0.5 ${cls}`} title={r.ql_event_error || undefined}>{label}</span>;
 }

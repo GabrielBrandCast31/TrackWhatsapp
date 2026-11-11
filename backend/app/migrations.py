@@ -77,6 +77,20 @@ _COLUMNS: dict[str, dict[str, str]] = {
         # chave publica da tag do site
         "site_key": "VARCHAR(32)",
     },
+    # qualificacao do formulario e o evento QualifiedLead
+    "lead_forms": {"qualification": "JSON"},
+    "form_responses": {
+        "qualified": "BOOLEAN",
+        "qualified_source": "VARCHAR(8)",
+        "qualification": "JSON",
+        "qualified_at": "TIMESTAMP",
+        "ql_event_status": "VARCHAR(16)",
+        "ql_event_error": "TEXT",
+        "ql_event_at": "TIMESTAMP",
+        "capi_ctx": "JSON",
+        "sheets_status": "VARCHAR(16)",
+        "sheets_error": "TEXT",
+    },
     # de onde veio o evento: botao, regra de palavra-chave ou primeiro contato
     "conversions": {"source": "VARCHAR(16)", "rule_id": "INTEGER"},
     # login do painel: base que ja existia ganha a tabela nova pelo create_all

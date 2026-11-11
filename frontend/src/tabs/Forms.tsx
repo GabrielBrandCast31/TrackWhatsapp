@@ -196,7 +196,7 @@ export default function Forms() {
                   </button>
                 </div>
 
-                <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                <div className={`mt-3 grid gap-2 text-center ${f.qualification?.enabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
                   <div className="rounded-lg bg-ink-950/50 py-2">
                     <div className="font-mono text-sm font-bold text-ink-100">{f.views}</div>
                     <div className="text-[9px] uppercase text-ink-500">Visitas</div>
@@ -213,6 +213,16 @@ export default function Forms() {
                     <div className="font-mono text-sm font-bold text-amber-300">{f.partials}</div>
                     <div className="text-[9px] uppercase text-ink-500">Incompletos</div>
                   </button>
+                  {f.qualification?.enabled && (
+                    <button
+                      onClick={() => setViewing({ form: f, tab: 'responses' })}
+                      title="Leads que bateram os critérios de qualificação (ou marcados na mão)"
+                      className="rounded-lg bg-ink-950/50 py-2 hover:bg-white/5"
+                    >
+                      <div className="font-mono text-sm font-bold text-sky-300">{f.qualified}</div>
+                      <div className="text-[9px] uppercase text-ink-500">Qualificados</div>
+                    </button>
+                  )}
                   <div className="rounded-lg bg-ink-950/50 py-2">
                     <div className="font-mono text-sm font-bold text-wa-400">{conv.toFixed(0)}%</div>
                     <div className="text-[9px] uppercase text-ink-500">Conversão</div>

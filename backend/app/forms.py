@@ -37,7 +37,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import journey, phones, settings_store
+from app import funnel, journey, phones, settings_store
+from app import qualification as ql
+from app import sheets
 from app import numbers as numbers_service
 from app.db import SessionLocal
 from app.ingest import upsert_contact
@@ -81,6 +83,11 @@ DEFAULT_SETTINGS = {
     "whatsapp_message": "Olá! Acabei de preencher o formulário e quero falar com vocês.",
     # carrega a tag de jornada da linha na pagina publica (TL_ID, UTMs, click ids)
     "track_journey": True,
+    # Google Sheets via Apps Script (ver app/sheets.py): uma linha por resposta
+    "sheets_enabled": False,
+    "sheets_url": "",
+    "sheets_tab": sheets.DEFAULT_TAB,
+    "sheets_secret": "",             # confere no script; nunca vai pra pagina publica
 }
 LAYOUTS = ("step", "page")
 PUBLIC_SETTINGS = (
@@ -167,6 +174,11 @@ def clean_settings(settings) -> dict:
     for k in ("redirect_url", "webhook_url"):
         if out[k] and not out[k].startswith(("http://", "https://")):
             out[k] = ""
+    if out["sheets_url"] and not sheets.valid_url(out["sheets_url"]):
+        out["sheets_url"] = ""
+    out["sheets_tab"] = out["sheets_tab"][:100] or sheets.DEFAULT_TAB
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{16,64}", out["sheets_secret"]):
+        out["sheets_secret"] = ""
     return out
 
 
@@ -197,14 +209,20 @@ def apply(form: LeadForm, d: dict) -> None:
         form.theme = clean_theme(d["theme"])
     if "settings" in d:
         form.settings = clean_settings(d["settings"])
+        if form.settings["sheets_enabled"] and not form.settings["sheets_secret"]:
+            form.settings = {**form.settings, "sheets_secret": sheets.new_secret()}
     if "logo_url" in d:
         form.logo_url = clean_logo(d["logo_url"])
+    if "qualification" in d:
+        form.qualification = ql.clean_config(d["qualification"])
     for k in ("create_lead", "active"):
         if k in d and d[k] is not None:
             setattr(form, k, bool(d[k]))
 
 
-def serialize(form: LeadForm, responses: int = 0, number: WaNumber | None = None, partials: int = 0) -> dict:
+def serialize(
+    form: LeadForm, responses: int = 0, number: WaNumber | None = None, partials: int = 0, qualified: int = 0,
+) -> dict:
     return {
         "id": form.id,
         "slug": form.slug,
@@ -228,6 +246,8 @@ def serialize(form: LeadForm, responses: int = 0, number: WaNumber | None = None
         "capi_token": "",
         "capi_token__set": bool(form.capi_token),
         "logo_url": form.logo_url or "",
+        "qualification": ql.clean_config(form.qualification),
+        "qualified": qualified,
         "created_at": form.created_at,
     }
 
@@ -241,6 +261,29 @@ async def response_counts(session: AsyncSession, ids: list[int]) -> dict[int, in
         .group_by(FormResponse.form_id)
     )
     return dict(rows.all())
+
+
+async def qualified_counts(session: AsyncSession, ids: list[int]) -> dict[int, int]:
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(FormResponse.form_id, func.count())
+        .where(FormResponse.form_id.in_(ids), FormResponse.qualified.is_(True))
+        .group_by(FormResponse.form_id)
+    )
+    return {fid: n for fid, n in rows.all()}
+
+
+def serialize_response(r: FormResponse) -> dict:
+    return {
+        "id": r.id, "answers": r.answers or {}, "contact_id": r.contact_id,
+        "transaction_id": r.transaction_id, "created_at": r.created_at,
+        "qualified": r.qualified, "qualified_source": r.qualified_source,
+        "qualification": r.qualification or {}, "qualified_at": r.qualified_at,
+        "ql_event_status": r.ql_event_status, "ql_event_error": r.ql_event_error,
+        "ql_event_at": r.ql_event_at,
+        "sheets_status": r.sheets_status, "sheets_error": r.sheets_error,
+    }
 
 
 async def partial_counts(session: AsyncSession, ids: list[int]) -> dict[int, int]:
@@ -393,10 +436,15 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
     number = await session.get(WaNumber, form.wa_number_id) if form.wa_number_id else None
     now = datetime.now(timezone.utc)
 
+    qcfg = ql.clean_config(form.qualification)
+    verdict = ql.evaluate(qcfg, clean_fields(form.fields), clean)
     response = FormResponse(
         form_id=form.id, answers=clean, transaction_id=tl,
         ip=(ctx.get("ip") or "")[:64] or None, user_agent=(ctx.get("ua") or "")[:500] or None,
+        capi_ctx={k: ctx.get(k) or "" for k in ("fbp", "fbc", "url", "event_id")},
     )
+    if verdict["qualified"] is not None:
+        _apply_verdict(response, verdict, now)
     session.add(response)
 
     # o envio do formulario e um evento da jornada do visitante
@@ -453,11 +501,24 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
         if tl:
             await journey.attach_journey(session, contact, f"tl={tl}", now, is_new=created)
         response.contact_id = contact.id
+        if response.qualified and qcfg["move_to_mql"]:
+            funnel.advance(contact, "mql", "form", now)
 
     await session.commit()
 
     # avisos depois do commit: o lead ja esta salvo, aviso lento nao segura a tela
-    asyncio.create_task(_after_submit(form.id, response.id, clean, labels, nome, phone, email, ctx))
+    task = asyncio.create_task(_after_submit(form.id, response.id, clean, labels, nome, phone, email, ctx))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+    # o navegador dispara o mesmo evento no Pixel, com o mesmo event_id (o Meta deduplica)
+    qualified_event = None
+    if response.qualified and qcfg["send_event"] and form.pixel_id:
+        qualified_event = {
+            "name": qcfg["event_name"],
+            "event_id": qualified_event_id(response.id),
+            "standard": qcfg["event_name"] in ql.STANDARD_EVENTS,
+        }
 
     whatsapp = None
     if settings["whatsapp_redirect"]:
@@ -473,7 +534,18 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
         "thank_you": form.thank_you or THANK_YOU,
         "redirect_url": whatsapp or settings["redirect_url"],
         "redirect_delay": settings["redirect_delay"],
+        "qualified_event": qualified_event,
     }
+
+
+# referencia forte das tasks de pos-envio: sem ela o GC pode recolher no meio
+_tasks: set[asyncio.Task] = set()
+
+
+def qualified_event_id(response_id: int) -> str:
+    """Fixo por resposta: Pixel e CAPI deduplicam, e a classificacao manual
+    depois nao conta o mesmo lead duas vezes."""
+    return f"ql-{response_id}"
 
 
 async def _after_submit(form_id, response_id, clean, labels, nome, phone, email, ctx) -> None:
@@ -490,9 +562,15 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: conferir o numero no WhatsApp falhou: %s", form.id, exc)
 
-        if form.whatsapp_notify and number is not None:
+        response = await session.get(FormResponse, response_id)
+        qcfg = ql.clean_config(form.qualification)
+        qualified = response.qualified if response is not None else None
+        skip_notify = qcfg["enabled"] and qcfg["notify_only_qualified"] and qualified is False
+        if form.whatsapp_notify and number is not None and not skip_notify:
             try:
-                await send_notify(session, number, form.whatsapp_notify, notify_text(form.title, resumo))
+                await send_notify(
+                    session, number, form.whatsapp_notify, notify_text(form.title, resumo, qualified=qualified),
+                )
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: aviso no WhatsApp falhou: %s", form.id, exc)
 
@@ -502,18 +580,28 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: CAPI falhou: %s", form.id, exc)
 
+        if response is not None and response.qualified:
+            try:
+                await send_qualified_event(session, form, response)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("formulario %s: evento de lead qualificado falhou: %s", form.id, exc)
+
+        if response is not None and sheets_ready(form):
+            await push_to_sheets(session, form, response)
+
         url = clean_settings(form.settings)["webhook_url"]
         if url:
             try:
-                await send_webhook(form, response_id, clean, labels, url)
+                await send_webhook(form, response_id, clean, labels, url, qualified)
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: webhook falhou: %s", form.id, exc)
 
 
-def notify_text(title: str, resumo: str, test: bool = False) -> str:
+def notify_text(title: str, resumo: str, test: bool = False, qualified: bool | None = None) -> str:
     if test:
         return f"🧪 *Teste de aviso — formulário \"{title}\"*\n\nAssim chega o aviso de cada nova resposta:\n\n{resumo}"
-    return f"🔥 *Novo lead no formulário \"{title}\"!*\n\n{resumo}"
+    tag = {True: "\n✅ *Lead qualificado*", False: "\n⚪ Não qualificado pelos critérios"}.get(qualified, "")
+    return f"🔥 *Novo lead no formulário \"{title}\"!*{tag}\n\n{resumo}"
 
 
 async def send_notify(session: AsyncSession, number: WaNumber, phone: str, text: str) -> None:
@@ -604,15 +692,23 @@ def capi_user_data(nome: str, email: str, phone: str, ctx: dict) -> dict:
 
 
 async def send_capi_lead(form: LeadForm, nome: str, email: str, phone: str, ctx: dict) -> None:
+    await send_capi_event(form, "Lead", ctx.get("event_id") or secrets.token_hex(16),
+                          nome, email, phone, ctx, {"content_name": form.title})
+
+
+async def send_capi_event(
+    form: LeadForm, event_name: str, event_id: str, nome: str, email: str, phone: str, ctx: dict,
+    custom_data: dict | None = None,
+) -> None:
     payload = {
         "data": [{
-            "event_name": "Lead",
+            "event_name": event_name,
             "event_time": int(time.time()),
             "action_source": "website",
-            "event_id": ctx.get("event_id") or secrets.token_hex(16),
+            "event_id": event_id,
             "event_source_url": ctx.get("url") or "",
             "user_data": capi_user_data(nome, email, phone, ctx),
-            "custom_data": {"content_name": form.title},
+            "custom_data": custom_data or {},
         }],
         # token no corpo, nao na URL (URL com credencial vaza em log)
         "access_token": form.capi_token,
@@ -625,6 +721,120 @@ async def send_capi_lead(form: LeadForm, nome: str, email: str, phone: str, ctx:
         r = await client.post(url, json=payload)
     if r.status_code >= 400:
         raise RuntimeError(f"{r.status_code} {r.text[:300]}")
+
+
+async def send_qualified_event(session: AsyncSession, form: LeadForm, response: FormResponse) -> str:
+    """Manda o evento de lead qualificado (QualifiedLead por padrao) pela CAPI.
+
+    Uma vez por resposta: se ja saiu, nao repete (reclassificar nao duplica).
+    Grava o resultado na resposta para a tela mostrar. Devolve o status.
+    """
+    qcfg = ql.clean_config(form.qualification)
+    if not qcfg["send_event"] or response.ql_event_status == "sent":
+        return response.ql_event_status or "off"
+    now = datetime.now(timezone.utc)
+    if not (form.pixel_id and form.capi_token):
+        response.ql_event_status, response.ql_event_error = "skipped", "Formulário sem Pixel e token da CAPI."
+        response.ql_event_at = now
+        await session.commit()
+        return "skipped"
+    nome, phone, email = lead_identity(form, response.answers or {})
+    ctx = {**(response.capi_ctx or {}), "ip": response.ip or "", "ua": response.user_agent or ""}
+    custom = {
+        "content_name": form.title,
+        "lead_score": (response.qualification or {}).get("score", 0),
+        "qualification_source": response.qualified_source or "auto",
+    }
+    try:
+        await send_capi_event(form, qcfg["event_name"], qualified_event_id(response.id),
+                              nome, email, phone, ctx, custom)
+        response.ql_event_status, response.ql_event_error = "sent", None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("formulario %s: evento %s falhou: %s", form.id, qcfg["event_name"], exc)
+        response.ql_event_status, response.ql_event_error = "failed", str(exc)[:500]
+    response.ql_event_at = now
+    await session.commit()
+    return response.ql_event_status
+
+
+def _apply_verdict(response: FormResponse, verdict: dict, now: datetime) -> None:
+    response.qualified = verdict["qualified"]
+    response.qualified_source = "auto" if verdict["qualified"] is not None else None
+    response.qualification = {k: verdict[k] for k in ("score", "matched", "failed")}
+    response.qualified_at = now
+
+
+async def set_manual_qualification(session: AsyncSession, form: LeadForm, response: FormResponse,
+                                   qualified: bool | None) -> None:
+    """Classificacao feita pela equipe. None volta para a avaliacao automatica.
+
+    Qualificou (na mao ou de volta no automatico): move para MQL se configurado
+    e manda o evento, se ainda nao saiu para essa resposta.
+    """
+    qcfg = ql.clean_config(form.qualification)
+    now = datetime.now(timezone.utc)
+    if qualified is None:
+        _apply_verdict(response, ql.evaluate(qcfg, clean_fields(form.fields), response.answers or {}), now)
+    else:
+        response.qualified = qualified
+        response.qualified_source = "manual"
+        response.qualified_at = now
+    if response.qualified and qcfg["move_to_mql"] and response.contact_id:
+        contact = await session.get(Contact, response.contact_id)
+        if contact is not None:
+            funnel.advance(contact, "mql", "form", now)
+    await session.commit()
+    if response.qualified:
+        await send_qualified_event(session, form, response)
+
+
+async def reapply_qualification(session: AsyncSession, form: LeadForm) -> dict:
+    """Reavalia as respostas automaticas com os criterios atuais. Nao mexe nas
+    manuais e nao dispara evento (lead antigo nao deve virar conversao de hoje)."""
+    qcfg = ql.clean_config(form.qualification)
+    fields = clean_fields(form.fields)
+    rows = (
+        await session.execute(
+            select(FormResponse).where(
+                FormResponse.form_id == form.id,
+                FormResponse.qualified_source.is_(None) | (FormResponse.qualified_source != "manual"),
+            )
+        )
+    ).scalars().all()
+    changed = 0
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        verdict = ql.evaluate(qcfg, fields, r.answers or {})
+        if verdict["qualified"] != r.qualified:
+            changed += 1
+        _apply_verdict(r, verdict, now)
+    await session.commit()
+    return {"evaluated": len(rows), "changed": changed}
+
+
+def sheets_ready(form: LeadForm) -> bool:
+    cfg = clean_settings(form.settings)
+    return bool(cfg["sheets_enabled"] and cfg["sheets_url"] and cfg["sheets_secret"])
+
+
+async def push_to_sheets(session: AsyncSession, form: LeadForm, response: FormResponse) -> str:
+    """Acrescenta a resposta na planilha e grava o resultado na resposta."""
+    cfg = clean_settings(form.settings)
+    contact = await session.get(Contact, response.contact_id) if response.contact_id else None
+    columns = sheets.build_columns(
+        form_title=form.title, response_id=response.id, created_at=response.created_at,
+        fields=clean_fields(form.fields), answers=response.answers or {}, qualified=response.qualified,
+        contact_utm=(contact.last_utm or contact.first_utm) if contact else None,
+        page_url=(response.capi_ctx or {}).get("url") or "", transaction_id=response.transaction_id,
+    )
+    try:
+        await sheets.append_row(cfg["sheets_url"], cfg["sheets_secret"], cfg["sheets_tab"], columns)
+        response.sheets_status, response.sheets_error = "sent", None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("formulario %s: planilha falhou: %s", form.id, exc)
+        response.sheets_status, response.sheets_error = "failed", str(exc)[:500]
+    await session.commit()
+    return response.sheets_status
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +896,9 @@ def pinned_request(url: str, ip: str | None) -> tuple[str, dict, dict]:
     return pinned, {"Host": host_header}, extensions
 
 
-async def send_webhook(form: LeadForm, response_id: int, clean: dict, labels: dict, url: str) -> None:
+async def send_webhook(
+    form: LeadForm, response_id: int, clean: dict, labels: dict, url: str, qualified: bool | None = None,
+) -> None:
     ip = await asyncio.to_thread(check_webhook_target, url)
     target, headers, extensions = pinned_request(url, ip)
     payload = {
@@ -696,6 +908,7 @@ async def send_webhook(form: LeadForm, response_id: int, clean: dict, labels: di
         "created_at": datetime.now(timezone.utc).isoformat(),
         "answers": {labels[k]: v for k, v in clean.items()},
         "answers_by_id": clean,
+        "qualified": qualified,
     }
     # sem seguir redirect: um 302 pra rede interna furaria a checagem
     async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:

@@ -683,6 +683,8 @@ class LeadForm(Base):
     pixel_id: Mapped[str] = mapped_column(String(32), default="")
     capi_token: Mapped[str] = mapped_column(Text, default="")              # segredo: nunca sai no publico
     logo_url: Mapped[str] = mapped_column(Text, default="")
+    # criterios de qualificacao e o evento QualifiedLead (ver app/qualification.py)
+    qualification: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -700,6 +702,20 @@ class FormResponse(Base):
     transaction_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # qualificacao: True/False; None = formulario sem criterio na hora do envio
+    qualified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    qualified_source: Mapped[str | None] = mapped_column(String(8), nullable=True)  # auto | manual
+    qualification: Mapped[dict] = mapped_column(JSON, default=dict)                 # score, regras que bateram
+    qualified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # evento QualifiedLead no Meta: sent | failed | skipped (sem Pixel/token)
+    ql_event_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ql_event_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ql_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # fbp/fbc/url da visita: o evento pode sair depois (classificacao manual)
+    capi_ctx: Mapped[dict] = mapped_column(JSON, default=dict)
+    # linha na planilha do Google Sheets: sent | failed (None = formulario sem planilha)
+    sheets_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    sheets_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

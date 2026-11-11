@@ -4,6 +4,8 @@ pagina /f/{slug} consome — no mesmo dominio do painel.
 
 import json
 import time
+
+import httpx
 from collections import defaultdict, deque
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,6 +14,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import access, form_ai, forms, journey, phones
+from app import qualification as ql
+from app import sheets
 from app.db import get_session
 from app.models import Contact, FormPartial, FormResponse, LeadForm, WaNumber
 from app.routers.collect import client_ip
@@ -48,9 +52,13 @@ async def list_forms(number_id: int | None = Query(default=None), session: Async
     ids = [f.id for f in rows]
     counts = await forms.response_counts(session, ids)
     partials = await forms.partial_counts(session, ids)
+    qualified = await forms.qualified_counts(session, ids)
     numbers = {n.id: n for n in (await session.execute(select(WaNumber))).scalars().all()}
     return [
-        forms.serialize(f, counts.get(f.id, 0), numbers.get(f.wa_number_id), partials.get(f.id, 0)) for f in rows
+        forms.serialize(
+            f, counts.get(f.id, 0), numbers.get(f.wa_number_id), partials.get(f.id, 0), qualified.get(f.id, 0),
+        )
+        for f in rows
     ]
 
 
@@ -129,6 +137,42 @@ async def test_notify(payload: NotifyTestIn, session: AsyncSession = Depends(get
     return {"ok": True}
 
 
+@router.get("/sheets-script")
+async def sheets_script(secret: str = Query(..., min_length=16, max_length=64)):
+    """O Apps Script que vai na planilha, ja com o segredo do formulario."""
+    return {"script": sheets.apps_script(secret)}
+
+
+class SheetsTestIn(BaseModel):
+    wa_number_id: int | None = None
+    url: str = ""
+    secret: str = ""
+    tab: str = ""
+    title: str = ""
+    fields: list = []
+
+
+@router.post("/sheets-test")
+async def sheets_test(payload: SheetsTestIn, session: AsyncSession = Depends(get_session)):
+    """Grava uma linha de exemplo (marcada TESTE) com o que esta na tela, mesmo sem salvar."""
+    await _number(session, payload.wa_number_id)
+    fields = forms.clean_fields(payload.fields)
+    answers = {f["id"]: (f["options"][0] if f["options"] else forms.SAMPLE_ANSWERS.get(f["type"], "Exemplo"))
+               for f in fields}
+    columns = sheets.build_columns(
+        form_title=payload.title.strip() or "Formulário", response_id="teste", created_at=None,
+        fields=fields, answers=answers, qualified=True,
+        page_url="https://exemplo.com/?utm_source=teste&utm_medium=cpc&utm_campaign=teste", test=True,
+    )
+    try:
+        r = await sheets.append_row(payload.url.strip(), payload.secret.strip(), payload.tab.strip(), columns)
+    except sheets.SheetsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Não foi possível falar com o Apps Script: {exc}") from exc
+    return {"ok": True, "row": r.get("row")}
+
+
 @router.patch("/{form_id}")
 async def update_form(form_id: int, payload: dict, session: AsyncSession = Depends(get_session)):
     form = await _form(session, form_id)
@@ -140,7 +184,8 @@ async def update_form(form_id: int, payload: dict, session: AsyncSession = Depen
     counts = await forms.response_counts(session, [form.id])
     partials = await forms.partial_counts(session, [form.id])
     number = await session.get(WaNumber, form.wa_number_id) if form.wa_number_id else None
-    return forms.serialize(form, counts.get(form.id, 0), number, partials.get(form.id, 0))
+    qualified = await forms.qualified_counts(session, [form.id])
+    return forms.serialize(form, counts.get(form.id, 0), number, partials.get(form.id, 0), qualified.get(form.id, 0))
 
 
 @router.delete("/{form_id}", status_code=204)
@@ -158,13 +203,68 @@ async def responses(form_id: int, limit: int = Query(default=300, le=2000), sess
             select(FormResponse).where(FormResponse.form_id == form.id).order_by(desc(FormResponse.id)).limit(limit)
         )
     ).scalars().all()
-    return [
-        {
-            "id": r.id, "answers": r.answers or {}, "contact_id": r.contact_id,
-            "transaction_id": r.transaction_id, "created_at": r.created_at,
-        }
-        for r in rows
-    ]
+    return [forms.serialize_response(r) for r in rows]
+
+
+@router.post("/{form_id}/responses/{response_id}/sheets")
+async def resend_to_sheets(form_id: int, response_id: int, session: AsyncSession = Depends(get_session)):
+    """Reenvia a resposta para a planilha (depois de corrigir a URL, por exemplo)."""
+    form = await _form(session, form_id)
+    response = await session.get(FormResponse, response_id)
+    if response is None or response.form_id != form.id:
+        raise HTTPException(status_code=404, detail="Resposta não encontrada.")
+    if not forms.sheets_ready(form):
+        raise HTTPException(status_code=400, detail="Ligue a planilha e salve a URL do Apps Script antes.")
+    await forms.push_to_sheets(session, form, response)
+    await session.refresh(response)
+    return forms.serialize_response(response)
+
+
+class QualifyIn(BaseModel):
+    # True/False = classificacao da equipe; None = volta para os criterios automaticos
+    qualified: bool | None = None
+
+
+@router.patch("/{form_id}/responses/{response_id}/qualification")
+async def qualify_response(
+    form_id: int, response_id: int, payload: QualifyIn, session: AsyncSession = Depends(get_session),
+):
+    """Marca a resposta como qualificada ou nao. Qualificou: move para MQL (se
+    configurado) e manda o evento ao Meta, uma unica vez por resposta."""
+    form = await _form(session, form_id)
+    response = await session.get(FormResponse, response_id)
+    if response is None or response.form_id != form.id:
+        raise HTTPException(status_code=404, detail="Resposta não encontrada.")
+    await forms.set_manual_qualification(session, form, response, payload.qualified)
+    await session.refresh(response)
+    return forms.serialize_response(response)
+
+
+class SimulateIn(BaseModel):
+    qualification: dict = {}
+    fields: list | None = None
+    limit: int = 500
+
+
+@router.post("/{form_id}/qualification/simulate")
+async def simulate_qualification(form_id: int, payload: SimulateIn, session: AsyncSession = Depends(get_session)):
+    """Testa criterios (ainda nao salvos) contra as respostas ja recebidas."""
+    form = await _form(session, form_id)
+    fields = forms.clean_fields(payload.fields if payload.fields is not None else form.fields)
+    rows = (
+        await session.execute(
+            select(FormResponse.answers).where(FormResponse.form_id == form.id)
+            .order_by(desc(FormResponse.id)).limit(max(1, min(payload.limit, 2000)))
+        )
+    ).scalars().all()
+    return ql.simulate(payload.qualification, fields, [a or {} for a in rows])
+
+
+@router.post("/{form_id}/qualification/reapply")
+async def reapply_qualification(form_id: int, session: AsyncSession = Depends(get_session)):
+    """Reclassifica as respostas antigas com os criterios salvos, sem disparar evento."""
+    form = await _form(session, form_id)
+    return await forms.reapply_qualification(session, form)
 
 
 @router.get("/{form_id}/partials")

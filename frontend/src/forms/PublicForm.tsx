@@ -233,6 +233,11 @@ export default function PublicFormPage({ slug }: { slug: string }) {
       if (form.pixel_id) {
         const w = window as unknown as { fbq?: (...a: unknown[]) => void };
         try { w.fbq?.("track", "Lead", {}, { eventID: eventId }); } catch { /* noop */ }
+        // lead que bateu os critérios: mesmo evento e event_id da CAPI (o Meta deduplica)
+        const qe = data.qualified_event as { name: string; event_id: string; standard: boolean } | null;
+        if (qe) {
+          try { w.fbq?.(qe.standard ? "track" : "trackCustom", qe.name, {}, { eventID: qe.event_id }); } catch { /* noop */ }
+        }
       }
       setRedirectTo(data.redirect_url || "");
       setDone(data.thank_you || "Obrigado!");

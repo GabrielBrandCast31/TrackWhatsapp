@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: LeadFormSettings = {
   whatsapp_redirect: false, whatsapp_phone: "",
   whatsapp_message: "Olá! Acabei de preencher o formulário e quero falar com vocês.",
   track_journey: true,
+  sheets_enabled: false, sheets_url: "", sheets_tab: "Respostas", sheets_secret: "",
 };
 
 export const FIELD_TYPES: { v: LeadFormFieldType; l: string; hint: string }[] = [

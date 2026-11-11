@@ -47,6 +47,52 @@ export interface LeadFormSettings {
   whatsapp_message: string
   /** carrega a tag de jornada da linha na página pública */
   track_journey: boolean
+  /** Google Sheets via Apps Script: uma linha por resposta */
+  sheets_enabled: boolean
+  /** URL do app da Web (termina em /exec) */
+  sheets_url: string
+  /** aba da planilha (criada se não existir) */
+  sheets_tab: string
+  /** conferido pelo script — vai embutido no código que você cola na planilha */
+  sheets_secret: string
+}
+
+export type QualOp = 'is_any' | 'is_none' | 'contains' | 'not_contains' | 'gte' | 'lte' | 'filled' | 'empty'
+
+/** Uma regra de qualificação sobre a resposta de uma pergunta. */
+export interface QualRule {
+  id: string
+  field_id: string
+  op: QualOp
+  /** opções (is_any/is_none) ou termos (contains/not_contains) */
+  values: string[]
+  /** referência numérica (gte/lte) */
+  value: string
+  /** pontos no modo "score" */
+  points: number
+}
+
+export interface LeadFormQualification {
+  enabled: boolean
+  /** all = todas as regras · any = qualquer uma · score = soma de pontos >= min_score */
+  mode: 'all' | 'any' | 'score'
+  min_score: number
+  rules: QualRule[]
+  /** manda o evento ao Meta (CAPI + Pixel) quando qualifica */
+  send_event: boolean
+  event_name: string
+  /** leva o card do CRM para MQL */
+  move_to_mql: boolean
+  /** aviso no WhatsApp só para lead qualificado */
+  notify_only_qualified: boolean
+}
+
+export interface QualSimulation {
+  total: number
+  qualified: number
+  has_rules: boolean
+  rules: { id: string; matched: number; text: string }[]
+  fields: { field_id: string; label: string; answered: number; options: { value: string; count: number; qualified: number }[] }[]
 }
 
 export interface LeadForm {
@@ -73,6 +119,9 @@ export interface LeadForm {
   capi_token: string
   capi_token__set?: boolean
   logo_url: string
+  qualification: LeadFormQualification
+  /** respostas classificadas como qualificadas */
+  qualified: number
   created_at: string | null
 }
 
@@ -82,6 +131,18 @@ export interface LeadFormResponse {
   contact_id: number | null
   transaction_id: string | null
   created_at: string | null
+  /** null = sem critério na hora do envio */
+  qualified: boolean | null
+  qualified_source: 'auto' | 'manual' | null
+  qualification: { score?: number; matched?: string[]; failed?: string[] }
+  qualified_at: string | null
+  /** evento QualifiedLead no Meta */
+  ql_event_status: 'sent' | 'failed' | 'skipped' | null
+  ql_event_error: string | null
+  ql_event_at: string | null
+  /** linha na planilha do Google Sheets */
+  sheets_status: 'sent' | 'failed' | null
+  sheets_error: string | null
 }
 
 /** Preenchimento abandonado: respostas até onde a pessoa chegou. */
@@ -164,3 +225,25 @@ export const contactFormResponses =(contactId: number) =>
   request<{ id: number; form_id: number; form_title: string; created_at: string; answers: { label: string; value: string }[] }[]>(
     `/api/forms/contact/${contactId}`,
   )
+/** Classifica a resposta na mão. `null` volta para os critérios automáticos. */
+export const setResponseQualification = (formId: number, responseId: number, qualified: boolean | null) =>
+  request<LeadFormResponse>(`/api/forms/${formId}/responses/${responseId}/qualification`, {
+    method: 'PATCH', body: JSON.stringify({ qualified }),
+  })
+/** Testa critérios (mesmo sem salvar) contra as respostas já recebidas. */
+export const simulateQualification = (formId: number, qualification: LeadFormQualification, fields: LeadFormField[]) =>
+  request<QualSimulation>(`/api/forms/${formId}/qualification/simulate`, {
+    method: 'POST', body: JSON.stringify({ qualification, fields }),
+  })
+/** Reclassifica as respostas automáticas com os critérios salvos (sem disparar evento). */
+export const reapplyQualification = (formId: number) =>
+  request<{ evaluated: number; changed: number }>(`/api/forms/${formId}/qualification/reapply`, { method: 'POST' })
+/** Apps Script pronto para colar na planilha, com o segredo do formulário. */
+export const getSheetsScript = (secret: string) =>
+  request<{ script: string }>(`/api/forms/sheets-script?secret=${encodeURIComponent(secret)}`)
+/** Grava uma linha de teste com o que está na tela (mesmo sem salvar). */
+export const testSheets = (p: { wa_number_id: number; url: string; secret: string; tab: string; title: string; fields: LeadFormField[] }) =>
+  request<{ ok: boolean; row?: number }>('/api/forms/sheets-test', { method: 'POST', body: JSON.stringify(p) })
+/** Reenvia uma resposta para a planilha. */
+export const resendToSheets = (formId: number, responseId: number) =>
+  request<LeadFormResponse>(`/api/forms/${formId}/responses/${responseId}/sheets`, { method: 'POST' })
