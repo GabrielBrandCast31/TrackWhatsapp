@@ -1,8 +1,8 @@
 """Tabelas da plataforma de trackeamento."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -888,3 +888,33 @@ class MetaLead(Base):
     )
     lead_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Demand(Base):
+    """Demanda do painel do gestor: uma tarefa com cliente, responsavel e prazo.
+
+    `wa_number_id` e o cliente (linha) a que ela se refere — opcional, porque
+    existe demanda interna. O admin ve todas; o usuario de operacao so as que
+    criou ou que foram atribuidas a ele (veja app.routers.demands).
+    """
+
+    __tablename__ = "demands"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wa_number_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wa_numbers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    assignee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    priority: Mapped[str] = mapped_column(String(16), default="media")   # baixa | media | alta | urgente
+    status: Mapped[str] = mapped_column(String(16), default="aberta", index=True)  # aberta | andamento | concluida
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

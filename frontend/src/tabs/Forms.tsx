@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { deleteForm, listForms, updateForm, type FormLine, type LeadForm } from '../forms/client'
+import {
+  createForm, deleteForm, listForms, updateForm, type FormAiDraft, type FormLine, type LeadForm,
+} from '../forms/client'
 import { FormAiModal } from '../forms/FormAiModal'
 import { FormEditorModal } from '../forms/FormEditorModal'
 import { FormResponsesModal } from '../forms/FormResponsesModal'
@@ -59,6 +61,32 @@ export default function Forms() {
   }
   const toggleAtivo = async (f: LeadForm) => {
     await updateForm(f.id, { active: !f.active })
+    load()
+  }
+  // Vários métodos gerados de uma vez: cada um vira um formulário pausado, com
+  // o método no nome para dar para distinguir na lista.
+  const criarDaIa = async (gerados: FormAiDraft[], lineId: number) => {
+    let criados = 0
+    try {
+      for (const g of gerados) {
+        const comMetodo = g.title.toLowerCase().includes(g.framework_name.toLowerCase())
+        await createForm({
+          wa_number_id: lineId,
+          title: comMetodo ? g.title : `${g.title} — ${g.framework_name}`,
+          headline: g.headline,
+          description: g.description,
+          thank_you: g.thank_you,
+          fields: g.fields,
+          active: false,
+        })
+        criados += 1
+      }
+    } catch (e) {
+      load()
+      const motivo = e instanceof Error ? e.message : 'falha ao salvar'
+      throw new Error(`${criados} de ${gerados.length} formulários criados — ${motivo}`)
+    }
+    setAiOpen(false)
     load()
   }
   const remover = async (f: LeadForm) => {
@@ -181,7 +209,7 @@ export default function Forms() {
                       <h3 className="truncate font-semibold text-ink-100">{f.title}</h3>
                       <p className="truncate text-[11px] text-ink-500">
                         {f.number_label ? `${f.number_label} · ` : ''}
-                        {f.fields.length} pergunta(s)
+                        {f.fields.filter((x) => x.type !== "info").length} pergunta(s)
                         {f.settings.layout === 'page' ? ' · página única' : ''}
                       </p>
                     </div>
@@ -297,6 +325,7 @@ export default function Forms() {
           clients={lines}
           defaultLine={numberId ?? 0}
           onClose={() => setAiOpen(false)}
+          onCreateAll={criarDaIa}
           onUse={(g) => {
             setDraft({
               title: g.title,

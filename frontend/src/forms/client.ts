@@ -5,6 +5,8 @@ import { request } from '../api'
 export type LeadFormFieldType =
   | 'text' | 'email' | 'phone' | 'textarea' | 'number' | 'date' | 'url'
   | 'choice' | 'multi' | 'select' | 'rating'
+  /** tela de conteúdo no meio da jornada: não é pergunta, não gera resposta */
+  | 'info'
 
 export interface LeadFormField {
   id: string
@@ -14,6 +16,10 @@ export interface LeadFormField {
   options: string[]
   placeholder: string
   help: string
+  /** só no tipo 'info': o texto da tela de conteúdo */
+  content?: string
+  /** só no tipo 'info': imagem ou vídeo (YouTube/Vimeo) mostrado na tela */
+  media_url?: string
 }
 
 export interface LeadFormTheme {
@@ -45,6 +51,13 @@ export interface LeadFormSettings {
   whatsapp_redirect: boolean
   whatsapp_phone: string
   whatsapp_message: string
+  /** primeiro atendimento: a linha manda uma mensagem pro lead depois do envio */
+  first_contact_enabled: boolean
+  /** {nome}, {nome_completo} e {formulario}; vazio = mensagem padrão */
+  first_contact_message: string
+  /** segundos de espera antes de mandar (0 a 600) */
+  first_contact_delay: number
+  first_contact_audience: 'all' | 'qualified'
   /** carrega a tag de jornada da linha na página pública */
   track_journey: boolean
   /** Google Sheets via Apps Script: uma linha por resposta */
@@ -55,6 +68,8 @@ export interface LeadFormSettings {
   sheets_tab: string
   /** conferido pelo script — vai embutido no código que você cola na planilha */
   sheets_secret: string
+  /** usa o Pixel e o token da CAPI da linha (aba Rastreamento) */
+  use_line_pixel: boolean
 }
 
 export type QualOp = 'is_any' | 'is_none' | 'contains' | 'not_contains' | 'gte' | 'lte' | 'filled' | 'empty'
@@ -85,6 +100,15 @@ export interface LeadFormQualification {
   move_to_mql: boolean
   /** aviso no WhatsApp só para lead qualificado */
   notify_only_qualified: boolean
+  /** só o qualificado é levado ao WhatsApp da linha; o resto fica na tela final */
+  whatsapp_only_qualified: boolean
+  /** tela final de quem não qualificou (vazio = a mensagem de obrigado) */
+  unqualified_message: string
+  /** destino opcional de quem não qualificou (um conteúdo, o site…) */
+  unqualified_redirect_url: string
+  /** manda uma confirmação no WhatsApp do lead que não qualificou */
+  notify_lead_unqualified: boolean
+  unqualified_lead_message: string
 }
 
 export interface QualSimulation {
@@ -215,9 +239,14 @@ export const generateFormWithAi = (p: FormAiInput) =>
 export const listFormResponses = async (id: number) => ({
   responses: await request<LeadFormResponse[]>(`/api/forms/${id}/responses`),
 })
+/** Pixel cadastrado em Rastreamento para a linha (o token nunca vem). */
+export const getLinePixel = (numberId: number) =>
+  request<{ pixel_id: string; token_set: boolean }>(`/api/forms/line-pixel?number_id=${numberId}`)
 /** Manda o aviso de novo lead com respostas de exemplo (usa o que está na tela, mesmo sem salvar). */
 export const testFormNotify = (p: { wa_number_id: number; phone: string; title: string; fields: LeadFormField[] }) =>
   request<{ ok: boolean }>('/api/forms/test-notify', { method: 'POST', body: JSON.stringify(p) })
+export const testFirstContact = (p: { wa_number_id: number; phone: string; title: string; message: string }) =>
+  request<{ ok: boolean }>('/api/forms/test-first-contact', { method: 'POST', body: JSON.stringify(p) })
 export const listFormPartials =(id: number) => request<LeadFormPartial[]>(`/api/forms/${id}/partials`)
 export const deleteFormPartial = (id: number, partialId: number) =>
   request<void>(`/api/forms/${id}/partials/${partialId}`, { method: 'DELETE' })

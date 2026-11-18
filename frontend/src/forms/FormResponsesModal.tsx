@@ -69,6 +69,9 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
     none: (rows || []).filter((r) => r.qualified == null).length,
   }), [rows]);
 
+  // telas de conteúdo não têm resposta: ficam fora das colunas e contagens
+  const questions = useMemo(() => form.fields.filter((f) => f.type !== "info"), [form.fields]);
+
   // onde a pessoa parou: a pergunta seguinte à última respondida
   const stoppedAt = (p: LeadFormPartial) => {
     const i = Math.min(p.step, form.fields.length - 1);
@@ -82,7 +85,7 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
   }
 
   function exportCsv() {
-    const cols = form.fields.map((f) => f.label);
+    const cols = questions.map((f) => f.label);
     const cell = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const head = tab === "responses" ? ["Data", "Qualificado", ...cols] : ["Última atividade", "Parou em", ...cols];
     const lines = [head.map(cell).join(";")];
@@ -91,7 +94,7 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
       lines.push([
         when ? new Date(when).toLocaleString("pt-BR") : "",
         ...(tab === "partials" ? [stoppedAt(r as LeadFormPartial)] : [qualLabel((r as LeadFormResponse).qualified)]),
-        ...form.fields.map((f) => r.answers[f.id] || ""),
+        ...questions.map((f) => r.answers[f.id] || ""),
       ].map(cell).join(";"));
     }
     // BOM para o Excel abrir os acentos corretamente
@@ -233,7 +236,7 @@ export function FormResponsesModal({ form, onClose, initialTab = "responses" }: 
                   {p.updated_at ? new Date(p.updated_at).toLocaleString("pt-BR") : ""}
                   {" · "}
                   <span className="text-amber-300/90">
-                    {Object.keys(p.answers).length} de {form.fields.length} respondida(s) · parou em {stoppedAt(p)}
+                    {Object.keys(p.answers).length} de {questions.length} respondida(s) · parou em {stoppedAt(p)}
                   </span>
                 </p>
                 <button onClick={() => void removePartial(p)} title="Apagar"

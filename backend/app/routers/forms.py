@@ -13,7 +13,8 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import access, form_ai, forms, journey, phones
+from app import access, form_ai, forms, journey, phones, settings_store
+from app import numbers as numbers_service
 from app import qualification as ql
 from app import sheets
 from app.db import get_session
@@ -113,6 +114,18 @@ async def create_form(payload: dict, session: AsyncSession = Depends(get_session
     return forms.serialize(form, 0, number)
 
 
+@router.get("/line-pixel")
+async def line_pixel(number_id: int = Query(...), session: AsyncSession = Depends(get_session)):
+    """O Pixel cadastrado em Rastreamento para a linha — o que o formulario usa
+    quando "usar o Pixel da linha" esta marcado. O token nunca sai daqui."""
+    number = await _number(session, number_id)
+    cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
+    return {
+        "pixel_id": str(cfg.get("meta_dataset_id") or ""),
+        "token_set": bool(str(cfg.get("meta_capi_token") or "").strip()),
+    }
+
+
 class NotifyTestIn(BaseModel):
     wa_number_id: int | None = None
     phone: str = ""
@@ -128,6 +141,30 @@ async def test_notify(payload: NotifyTestIn, session: AsyncSession = Depends(get
     if len(phones.digits(payload.phone)) < 10:
         raise HTTPException(status_code=400, detail="Digite o número que recebe o aviso, com DDD.")
     text = forms.notify_text(payload.title.strip() or "Novo formulário", forms.sample_resumo(payload.fields), test=True)
+    try:
+        await forms.send_notify(session, number, payload.phone, text)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"O WhatsApp da linha “{number.label}” não enviou: {str(exc)[:300]}"
+        ) from exc
+    return {"ok": True}
+
+
+class FirstContactTestIn(BaseModel):
+    wa_number_id: int | None = None
+    phone: str = ""
+    title: str = ""
+    message: str = ""
+
+
+@router.post("/test-first-contact")
+async def test_first_contact(payload: FirstContactTestIn, session: AsyncSession = Depends(get_session)):
+    """Manda a mensagem de primeiro atendimento (com "Maria Silva" no {nome}) pro
+    numero digitado, usando o texto da tela mesmo sem salvar."""
+    number = await _number(session, payload.wa_number_id)
+    if len(phones.digits(payload.phone)) < 10:
+        raise HTTPException(status_code=400, detail="Digite o número que recebe o teste, com DDD.")
+    text = forms.first_contact_text(payload.message[:1500], "Maria Silva", payload.title.strip() or "Novo formulário")
     try:
         await forms.send_notify(session, number, payload.phone, text)
     except Exception as exc:  # noqa: BLE001
@@ -156,7 +193,7 @@ class SheetsTestIn(BaseModel):
 async def sheets_test(payload: SheetsTestIn, session: AsyncSession = Depends(get_session)):
     """Grava uma linha de exemplo (marcada TESTE) com o que esta na tela, mesmo sem salvar."""
     await _number(session, payload.wa_number_id)
-    fields = forms.clean_fields(payload.fields)
+    fields = forms.question_fields(payload.fields)
     answers = {f["id"]: (f["options"][0] if f["options"] else forms.SAMPLE_ANSWERS.get(f["type"], "Exemplo"))
                for f in fields}
     columns = sheets.build_columns(
@@ -359,7 +396,8 @@ async def public_form(slug: str, preview: bool = Query(default=False), session: 
     if number is not None and forms.clean_settings(form.settings)["track_journey"]:
         # linha que nunca abriu "Tag do site" ainda nao tem chave: nasce aqui
         await journey.ensure_site_key(session, number)
-    return forms.public_payload(form, number)
+    pixel_id, _ = await forms.meta_target(session, form, number)
+    return forms.public_payload(form, number, pixel_id)
 
 
 @public_router.post("/{slug}/submit")

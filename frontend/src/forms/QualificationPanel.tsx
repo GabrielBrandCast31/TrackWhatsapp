@@ -5,13 +5,17 @@ import { useState } from "react";
 import { AlertCircle, Check, Loader2, Plus, RotateCcw, Sparkles, Trash2 } from "./icons";
 import {
   reapplyQualification, simulateQualification,
-  type LeadFormField, type LeadFormQualification, type QualOp, type QualRule, type QualSimulation,
+  type LeadFormField, type LeadFormQualification, type LeadFormSettings, type QualOp, type QualRule,
+  type QualSimulation,
 } from "./client";
 import { Field, INPUT, SettingRow, Toggle } from "./editorUi";
 
 export const DEFAULT_QUALIFICATION: LeadFormQualification = {
   enabled: false, mode: "all", min_score: 1, rules: [],
   send_event: true, event_name: "QualifiedLead", move_to_mql: true, notify_only_qualified: false,
+  whatsapp_only_qualified: false, unqualified_message: "", unqualified_redirect_url: "",
+  notify_lead_unqualified: false,
+  unqualified_lead_message: "Olá, {nome}! Recebemos as suas respostas. Nossa equipe vai analisar e, se fizer sentido, entra em contato por aqui.",
 };
 
 const OP_LABEL: Record<QualOp, string> = {
@@ -32,8 +36,8 @@ function opsFor(f: LeadFormField | undefined): QualOp[] {
   return ["contains", "not_contains", "filled", "empty"];
 }
 
-/** Perguntas de contato não qualificam ninguém — ficam fora da lista. */
-const qualifiable = (fields: LeadFormField[]) => fields.filter((f) => !["phone", "email"].includes(f.type));
+/** Perguntas de contato e telas de conteúdo não qualificam ninguém — ficam fora da lista. */
+const qualifiable = (fields: LeadFormField[]) => fields.filter((f) => !["phone", "email", "info"].includes(f.type));
 
 function newRule(fields: LeadFormField[]): QualRule {
   const f = qualifiable(fields).find((x) => CHOICE_TYPES.includes(x.type)) || qualifiable(fields)[0] || fields[0];
@@ -208,6 +212,72 @@ export function QualActions({ q, onChange, pixelReady, notifySet }: {
           : "Configure o número de aviso em Notificações para usar esta opção."}>
         <Toggle checked={q.notify_only_qualified} onChange={(v) => set({ notify_only_qualified: v })} />
       </SettingRow>
+    </>
+  );
+}
+
+// --------------------------- destino por resultado --------------------------
+/** Para onde cada lead vai ao terminar: o qualificado cai no WhatsApp da linha
+ *  na hora; o não qualificado pode ser barrado e ficar só na tela final. */
+export function QualRouting({ q, onChange, settings, onSettings, notifySet }: {
+  q: LeadFormQualification; onChange: (q: LeadFormQualification) => void;
+  settings: LeadFormSettings; onSettings: (patch: Partial<LeadFormSettings>) => void;
+  notifySet: boolean;
+}) {
+  const set = (patch: Partial<LeadFormQualification>) => onChange({ ...q, ...patch });
+  const classifies = q.enabled && q.rules.length > 0;
+  const warn = "rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-300";
+  return (
+    <>
+      <SettingRow label="Lead qualificado: abrir o WhatsApp da linha na hora"
+        hint="Ao enviar, o lead cai na conversa com a mensagem pronta e o TL_ID da jornada. O número e a mensagem ficam em Comportamento → Depois do envio.">
+        <Toggle checked={settings.whatsapp_redirect} onChange={(v) => onSettings({ whatsapp_redirect: v })} />
+      </SettingRow>
+      <SettingRow label="Não deixar o lead não qualificado ir para o WhatsApp"
+        hint="Quem não bate os critérios não é redirecionado: fica na tela final abaixo. A resposta continua salva no painel e no CRM."
+        help="Vale também para o redirecionamento padrão do formulário — o não qualificado só vai para o destino que você definir aqui.">
+        <Toggle checked={q.whatsapp_only_qualified} onChange={(v) => set({ whatsapp_only_qualified: v })} />
+      </SettingRow>
+      {q.whatsapp_only_qualified && (
+        <>
+          {!classifies && (
+            <p className={warn}>
+              Ligue a classificação e crie ao menos uma regra em “Critérios de qualificação”. Sem critério, nenhum lead é barrado.
+            </p>
+          )}
+          <Field label="Tela final de quem não qualificou"
+            hint="Use para orientar o lead: o que ele precisa ter ou fazer antes de falar com o time. Vazio = a mensagem de obrigado padrão.">
+            <textarea className={`${INPUT} min-h-[70px] resize-y`} value={q.unqualified_message}
+              placeholder="Obrigado! Pelo seu momento atual, preparamos um material que vai te ajudar a dar o próximo passo."
+              onChange={(e) => set({ unqualified_message: e.target.value })} />
+          </Field>
+          <Field label="Levar o não qualificado para (opcional)"
+            hint="Um conteúdo, uma aula, o site — algo que aumente a consciência dele. Vazio = fica na tela final.">
+            <input className={INPUT} value={q.unqualified_redirect_url} placeholder="https://seusite.com.br/guia"
+              onChange={(e) => set({ unqualified_redirect_url: e.target.value.trim() })} />
+            {/wa\.me|whatsapp\.com/i.test(q.unqualified_redirect_url) && (
+              <p className="mt-1 text-[11px] text-amber-300">Esse endereço abre o WhatsApp — o lead não qualificado passaria para a linha do mesmo jeito.</p>
+            )}
+          </Field>
+          <SettingRow label="Confirmar o preenchimento no WhatsApp do lead"
+            hint="A linha envia uma mensagem automática avisando que o formulário chegou — sem abrir a conversa pelo redirecionamento."
+            help="Sai pela instância da linha, para o telefone informado no formulário. O lead pode responder a essa mensagem.">
+            <Toggle checked={q.notify_lead_unqualified} onChange={(v) => set({ notify_lead_unqualified: v })} />
+          </SettingRow>
+          {q.notify_lead_unqualified && (
+            <Field label="Mensagem de confirmação" hint="{nome} vira o primeiro nome do lead.">
+              <textarea className={`${INPUT} min-h-[60px] resize-y`} value={q.unqualified_lead_message}
+                onChange={(e) => set({ unqualified_lead_message: e.target.value })} />
+            </Field>
+          )}
+          <p className={q.notify_only_qualified && notifySet ? warn
+            : "rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3 text-xs leading-relaxed text-ink-400"}>
+            {!notifySet ? "Sem número de aviso configurado (Notificações), a equipe não é avisada dos preenchimentos."
+              : q.notify_only_qualified ? "“Avisar no WhatsApp só os qualificados” está ligado: a equipe não recebe aviso de quem foi barrado."
+              : "A equipe continua recebendo o aviso de cada preenchimento, marcado como não qualificado e não levado ao WhatsApp."}
+          </p>
+        </>
+      )}
     </>
   );
 }

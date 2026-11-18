@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Check, Loader2, Star } from './icons';
 import type { LeadFormField, LeadFormSettings, LeadFormTheme } from './client';
 import {
   DEFAULT_SETTINGS, DEFAULT_THEME, FONT_STACK, RADIUS_PX, contrastOn, fieldPlaceholder,
-  pageBackground, validateAnswer, withAlpha,
+  isQuestion, mediaEmbed, pageBackground, validateAnswer, withAlpha,
 } from './formKit';
 
 // Página PÚBLICA do formulário de captação (/f/{slug}), no mesmo domínio do
@@ -121,6 +121,8 @@ export default function PublicFormPage({ slug }: { slug: string }) {
   const theme: LeadFormTheme = { ...DEFAULT_THEME, ...(form?.theme || {}) };
   const cfg: LeadFormSettings = { ...DEFAULT_SETTINGS, ...(form?.settings || {}) };
   const fields = useMemo(() => form?.fields || [], [form]);
+  // as telas de conteúdo entram na ordem da jornada, mas não contam como pergunta
+  const questions = useMemo(() => fields.filter(isQuestion), [fields]);
   const stepMode = cfg.layout === "step";
   const field = stepMode && step >= 0 ? fields[step] : null;
   const isLast = step === fields.length - 1;
@@ -131,12 +133,12 @@ export default function PublicFormPage({ slug }: { slug: string }) {
     if (done) return 100;
     if (!fields.length) return 0;
     if (stepMode) return step < 0 ? 0 : Math.round((step / fields.length) * 100);
-    const feitas = fields.filter((f) => {
+    const feitas = questions.filter((f) => {
       const v = answers[f.id];
       return Array.isArray(v) ? v.length > 0 : !!(v || "").trim();
     }).length;
-    return Math.round((feitas / fields.length) * 100);
-  }, [answers, done, fields, step, stepMode]);
+    return questions.length ? Math.round((feitas / questions.length) * 100) : 0;
+  }, [answers, done, fields, questions, step, stepMode]);
 
   // redireciona depois do envio, quando configurado
   useEffect(() => {
@@ -350,31 +352,38 @@ export default function PublicFormPage({ slug }: { slug: string }) {
               {cfg.cover_button || "Começar"} <ArrowRight className="size-5" />
             </button>
             <p className="mt-3 text-xs opacity-50">
-              {fields.length} pergunta{fields.length === 1 ? "" : "s"} · leva menos de 1 minuto ⏱
+              {questions.length} pergunta{questions.length === 1 ? "" : "s"} · leva menos de 1 minuto ⏱
             </p>
           </div>
         ) : stepMode && field ? (
           // ------------------------ uma pergunta por vez -----------------------
           <div key={field.id} className="fq-in">
-            <p className="text-sm font-semibold" style={{ color: theme.primary }}>
-              {step + 1} de {fields.length}
-            </p>
-            <h2 className="mt-2 text-2xl font-bold leading-snug md:text-3xl">
-              {field.label}
-              {field.required && <span style={{ color: theme.primary }}> *</span>}
-            </h2>
-            {field.help && <p className="mt-2 text-sm leading-relaxed opacity-60">{field.help}</p>}
+            {isQuestion(field) ? (
+              <>
+                <p className="text-sm font-semibold" style={{ color: theme.primary }}>
+                  {questions.indexOf(field) + 1} de {questions.length}
+                </p>
+                <h2 className="mt-2 text-2xl font-bold leading-snug md:text-3xl">
+                  {field.label}
+                  {field.required && <span style={{ color: theme.primary }}> *</span>}
+                </h2>
+                {field.help && <p className="mt-2 text-sm leading-relaxed opacity-60">{field.help}</p>}
 
-            <div className="mt-7">
-              <FieldInput field={field} value={answers[field.id] ?? ""} theme={theme} big
-                inputRef={inputRef}
-                onChange={(v) => setAnswer(field.id, v)}
-                onToggle={(opt) => toggleMulti(field.id, opt)}
-                onPick={(opt) => {
-                  setAnswer(field.id, opt);
-                  if (!isLast) window.setTimeout(() => setStep((s) => (s === step ? s + 1 : s)), 260);
-                }} />
-            </div>
+                <div className="mt-7">
+                  <FieldInput field={field} value={answers[field.id] ?? ""} theme={theme} big
+                    inputRef={inputRef}
+                    onChange={(v) => setAnswer(field.id, v)}
+                    onToggle={(opt) => toggleMulti(field.id, opt)}
+                    onPick={(opt) => {
+                      setAnswer(field.id, opt);
+                      if (!isLast) window.setTimeout(() => setStep((s) => (s === step ? s + 1 : s)), 260);
+                    }} />
+                </div>
+              </>
+            ) : (
+              // tela de conteúdo: explica e prepara o lead para a próxima pergunta
+              <InfoBlock field={field} theme={theme} big />
+            )}
 
             {errs[field.id] && <p className="mt-3 text-sm font-medium" style={{ color: "#f87171" }}>{errs[field.id]}</p>}
 
@@ -389,7 +398,7 @@ export default function PublicFormPage({ slug }: { slug: string }) {
                 className="inline-flex items-center gap-2 px-7 py-3.5 text-base font-bold transition-transform hover:scale-[1.02] disabled:opacity-60"
                 style={btn}>
                 {sending && <Loader2 className="size-5 animate-spin" />}
-                {isLast ? theme.button || "Enviar" : "OK"}
+                {isLast ? theme.button || "Enviar" : isQuestion(field) ? "OK" : "Continuar"}
                 {!isLast && !sending && <ArrowRight className="size-5" />}
               </button>
               {step > 0 && (
@@ -408,14 +417,18 @@ export default function PublicFormPage({ slug }: { slug: string }) {
             {form.description && <p className="mt-3 text-base leading-relaxed opacity-70">{form.description}</p>}
 
             <div className="mt-8 space-y-5">
-              {fields.map((f, i) => (
+              {fields.map((f) => !isQuestion(f) ? (
+                <div key={f.id} className="px-1 py-2">
+                  <InfoBlock field={f} theme={theme} />
+                </div>
+              ) : (
                 <div key={f.id} id={`campo-${f.id}`} className="p-5"
                   style={{
                     background: withAlpha(theme.text, 0.04), borderRadius: cardRadius,
                     border: `1px solid ${errs[f.id] ? "#f87171" : withAlpha(theme.text, 0.08)}`,
                   }}>
                   <label className="block text-base font-semibold leading-snug">
-                    <span className="mr-1.5 text-xs font-bold opacity-40">{i + 1}.</span>
+                    <span className="mr-1.5 text-xs font-bold opacity-40">{questions.indexOf(f) + 1}.</span>
                     {f.label}
                     {f.required && <span style={{ color: theme.primary }}> *</span>}
                   </label>
@@ -451,6 +464,33 @@ export default function PublicFormPage({ slug }: { slug: string }) {
         <footer className="pb-6 text-center text-[11px] opacity-40">
           {cfg.branding_text}
         </footer>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------- tela de conteúdo -----------------------------
+function InfoBlock({ field, theme, big }: { field: LeadFormField; theme: LeadFormTheme; big?: boolean }) {
+  const media = mediaEmbed(field.media_url);
+  const soft = Math.min(RADIUS_PX[theme.radius], 18);
+  return (
+    <div>
+      <h2 className={big ? "text-2xl font-bold leading-snug md:text-3xl" : "text-xl font-bold leading-snug"}>
+        {field.label}
+      </h2>
+      {media?.kind === "video" && (
+        <div className="mt-5 aspect-video w-full overflow-hidden" style={{ borderRadius: soft, background: "#000" }}>
+          <iframe src={media.src} title={field.label} className="size-full" loading="lazy"
+            allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowFullScreen />
+        </div>
+      )}
+      {media?.kind === "image" && (
+        <img src={media.src} alt="" className="mt-5 max-h-80 w-full object-cover" style={{ borderRadius: soft }} />
+      )}
+      {field.content && (
+        <p className={`mt-4 whitespace-pre-line leading-relaxed opacity-80 ${big ? "text-base md:text-lg" : "text-sm"}`}>
+          {field.content}
+        </p>
       )}
     </div>
   );

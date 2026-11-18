@@ -5,6 +5,7 @@ import { api, type Stats } from './api'
 import { AuthProvider, useAuth } from './authContext'
 import {
   IconBoard,
+  IconClipboard,
   IconCode,
   IconCrown,
   IconForm,
@@ -29,6 +30,7 @@ import Atendimento from './tabs/Atendimento'
 import Attribution from './tabs/Attribution'
 import Campaigns from './tabs/Campaigns'
 import Conversions from './tabs/Conversions'
+import Demands from './tabs/Demands'
 import Forms from './tabs/Forms'
 import CrmCloud from './tabs/CrmCloud'
 import CrmNumber from './tabs/CrmNumber'
@@ -52,6 +54,7 @@ const TABS = [
   { id: 'attribution', label: 'Atribuição', hint: 'Anúncio × conversa', Icon: IconTarget },
   { id: 'leads', label: 'Leads', hint: 'Base de contatos', Icon: IconUsers },
   { id: 'conversions', label: 'Conversões', hint: 'Envios ao Meta', Icon: IconTrending },
+  { id: 'demands', label: 'Demandas', hint: 'Painel de tarefas do gestor', Icon: IconClipboard },
   // só admin: o backend recusa as rotas de dentro dela pra perfil de operação
   { id: 'admin', label: 'Admin', hint: 'Usuários e acessos', Icon: IconShield, adminOnly: true },
   // só o dono da plataforma: todos os clientes e o relatório no WhatsApp
@@ -226,8 +229,8 @@ function Shell() {
               </div>
             </div>
 
-            {/* a tela de super admin tem os próprios números, de todas as linhas */}
-            {stats && active.id !== 'superadmin' && (
+            {/* super admin e demandas têm os próprios números no topo */}
+            {stats && active.id !== 'superadmin' && active.id !== 'demands' && (
               <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                 <Stat label="Jornadas no site" value={stats.journeys ?? 0} />
                 <Stat label="Cliques no WhatsApp" value={stats.whatsapp_clicks ?? 0} />
@@ -250,6 +253,7 @@ function Shell() {
             {tab === 'campaigns' && <Campaigns />}
             {tab === 'leads' && <Leads onChanged={refresh} />}
             {tab === 'conversions' && <Conversions onChanged={refresh} />}
+            {tab === 'demands' && <Demands />}
             {tab === 'admin' && isAdmin && <Admin onChanged={refresh} />}
             {tab === 'superadmin' && isSuper && <SuperAdmin />}
           </div>

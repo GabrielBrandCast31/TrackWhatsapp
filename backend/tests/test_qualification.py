@@ -77,15 +77,15 @@ async def main():
 
     sent: list[dict] = []
 
-    async def fake_capi(form, event_name, event_id, nome, email, phone, ctx, custom_data=None):
-        sent.append({"name": event_name, "id": event_id, "fbp": ctx.get("fbp"), "custom": custom_data})
+    async def fake_capi(form, event_name, event_id, nome, email, phone, ctx, custom_data=None, target=None):
+        sent.append({"name": event_name, "id": event_id, "fbp": ctx.get("fbp"), "custom": custom_data, "target": target})
 
     forms.send_capi_event = fake_capi
 
     async def no_notify(*a, **k):
         return None
 
-    forms.send_notify = no_notify
+    real_notify, forms.send_notify = forms.send_notify, no_notify
     forms.fix_wa_id = no_notify
 
     async def settle():
@@ -175,6 +175,76 @@ async def main():
         row = (await http.get(f"/api/forms/{g['id']}/responses", headers=H)).json()[0]
         check("sem Pixel: qualifica mas evento fica 'skipped'", row["qualified"] is True and row["ql_event_status"] == "skipped"
               and r.get("qualified_event") is None, row)
+
+        print("jornada: conteúdo, WhatsApp só pro qualificado e Pixel da linha")
+        avisos: list[tuple[str, str]] = []
+
+        async def fake_send(cfg, to, text):
+            avisos.append((to, text))
+            return {}
+
+        async def fake_wa_id(cfg, wa_id):
+            return wa_id
+
+        from app.services import evolution
+        evolution.send_text, evolution.whatsapp_id = fake_send, fake_wa_id
+        forms.send_notify = real_notify
+        async with SessionLocal() as s:
+            line = await s.get(WaNumber, A)
+            line.overrides = {"meta_dataset_id": "777", "meta_capi_token": "TK-LINHA"}
+            await s.commit()
+        lp = (await http.get(f"/api/forms/line-pixel?number_id={A}", headers=H)).json()
+        check("painel enxerga o Pixel da linha, sem o token", lp == {"pixel_id": "777", "token_set": True}, lp)
+
+        info = {"id": "aula", "label": "Por que isso importa", "type": "info", "content": "Quem mede, vende mais.",
+                "media_url": "javascript:alert(1)", "required": True}
+        j = (await http.post("/api/forms", headers=H, json={
+            "title": "Jornada", "wa_number_id": A, "fields": [FIELDS[0], info, *FIELDS[1:]],
+            "whatsapp_notify": "31 97777-0000", "thank_you": "Obrigado!",
+            "settings": {"whatsapp_redirect": True, "whatsapp_phone": "5531999990000", "use_line_pixel": True,
+                         "redirect_url": "https://wa.me/5531999990000"},
+            "qualification": {"enabled": True, "rules": RULES, "whatsapp_only_qualified": True,
+                              "unqualified_message": "Ainda não é o momento.",
+                              "unqualified_redirect_url": "https://exemplo.com/guia",
+                              "notify_lead_unqualified": True},
+        })).json()
+        tela = next(x for x in j["fields"] if x["id"] == "aula")
+        check("tela de conteúdo salva, sem URL perigosa", tela["type"] == "info" and tela["content"] == "Quem mede, vende mais."
+              and tela["media_url"] == "" and tela["required"] is False, tela)
+        pub = (await http.get(f"/api/forms/public/{j['slug']}")).json()
+        check("página pública usa o Pixel da linha", pub["pixel_id"] == "777", pub.get("pixel_id"))
+        check("página pública não expõe os critérios", "qualification" not in pub)
+        subj = lambda answers: http.post(f"/api/forms/public/{j['slug']}/submit", json={"answers": answers})
+
+        n = len(sent)
+        r = (await subj({"nome": "Duda", "zap": "31 98888-4444", "orc": "Acima de R$ 5 mil", "nota": "5"})).json()
+        await settle()
+        check("qualificado: vai pro WhatsApp na hora", r["redirect_url"].startswith("https://wa.me/5531999990000?text=")
+              and r["thank_you"] == "Obrigado!", r)
+        check("qualificado: evento do Pixel da linha no navegador", (r.get("qualified_event") or {}).get("name") == "QualifiedLead", r)
+        check("CAPI sai com o Pixel e o token da linha",
+              [e["name"] for e in sent[n:]] == ["Lead", "QualifiedLead"] and all(e["target"] == ("777", "TK-LINHA") for e in sent[n:]), sent[n:])
+        check("qualificado: só o aviso da equipe", len(avisos) == 1 and avisos[0][0] == "5531977770000"
+              and "Lead qualificado" in avisos[0][1] and "Não foi levado" not in avisos[0][1], avisos)
+
+        avisos.clear()
+        r = (await subj({"nome": "Edu Lima", "zap": "31 98888-5555", "orc": "Até R$ 1 mil", "nota": "5"})).json()
+        await settle()
+        check("não qualificado: sem WhatsApp, com a tela e o destino dele",
+              r["redirect_url"] == "https://exemplo.com/guia" and r["thank_you"] == "Ainda não é o momento.", r)
+        equipe = [t for to, t in avisos if to == "5531977770000"]
+        lead = [t for to, t in avisos if to == "5531988885555"]
+        check("não qualificado: equipe é avisada do preenchimento", len(equipe) == 1 and "Não foi levado ao WhatsApp" in equipe[0]
+              and "Por que isso importa" not in equipe[0], avisos)
+        check("não qualificado: lead recebe só a confirmação", len(lead) == 1 and lead[0].startswith("Olá, Edu!"), avisos)
+
+        await http.patch(f"/api/forms/{j['id']}", headers=H, json={
+            "qualification": {**j["qualification"], "whatsapp_only_qualified": False}})
+        avisos.clear()
+        r = (await subj({"nome": "Fabi", "zap": "31 98888-6666", "orc": "Até R$ 1 mil", "nota": "5"})).json()
+        await settle()
+        check("trava desligada: todo mundo vai pro WhatsApp", r["redirect_url"].startswith("https://wa.me/"), r)
+        check("trava desligada: lead não recebe confirmação", all(to == "5531977770000" for to, _ in avisos), avisos)
 
     print(f"\n{ok} ok, {fail} falha(s)")
     sys.exit(1 if fail else 0)

@@ -539,12 +539,17 @@ async def _ai_draft(fw: dict, brief: str, tom: str, alvo: int) -> dict:
         "aberta valer mais que a facilidade de responder.\n"
         "- Nunca escreva o nome da etapa na pergunta. O lead não sabe o que é BANT.\n"
         "- `help` é opcional e curto; use só quando a pergunta precisar de contexto.\n"
+        "- Inclua 1 ou 2 itens de `type` \"info\" entre as perguntas: são telas de "
+        "conteúdo (não perguntas, não contam no total) que aumentam a consciência do "
+        "lead sobre o problema ou a solução antes da pergunta seguinte. Nelas, `label` "
+        "é um título curto e `content` tem 1 a 3 frases; nunca comece nem termine o "
+        "formulário com uma delas.\n"
         "- Revise a ortografia: headline e perguntas vão para uma página pública.\n"
         "\nResponda APENAS este JSON, sem texto fora dele:\n"
         '{"title":"nome interno curto","headline":"título que o lead vê",'
         '"description":"1 frase de apoio","thank_you":"mensagem após o envio",'
         '"fields":[{"label":"","type":"","required":true,"options":[],'
-        '"placeholder":"","help":""}]}'
+        '"placeholder":"","help":"","content":""}]}'
     )
     texto = await generate_text(prompt, SYSTEM)
     obj = _parse_json_object(texto)

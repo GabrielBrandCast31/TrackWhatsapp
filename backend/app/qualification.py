@@ -30,6 +30,11 @@ STANDARD_EVENTS = {
     "Subscribe", "StartTrial", "Purchase", "ViewContent", "FindLocation",
 }
 
+DEFAULT_LEAD_MESSAGE = (
+    "Olá, {nome}! Recebemos as suas respostas. Nossa equipe vai analisar e, "
+    "se fizer sentido, entra em contato por aqui."
+)
+
 DEFAULT_CONFIG = {
     "enabled": False,
     "mode": "all",
@@ -42,6 +47,14 @@ DEFAULT_CONFIG = {
     "move_to_mql": True,
     # aviso no WhatsApp da equipe so para lead qualificado
     "notify_only_qualified": False,
+    # so o lead qualificado e levado ao WhatsApp da linha ao terminar; o nao
+    # qualificado fica na tela final (mensagem/destino proprios, abaixo)
+    "whatsapp_only_qualified": False,
+    "unqualified_message": "",        # vazio = a mensagem de obrigado do formulario
+    "unqualified_redirect_url": "",   # opcional: um conteudo, o site... nunca o WhatsApp
+    # confirmacao automatica pro lead barrado, enviada pela instancia da linha
+    "notify_lead_unqualified": False,
+    "unqualified_lead_message": DEFAULT_LEAD_MESSAGE,
 }
 MAX_RULES = 30
 
@@ -87,7 +100,8 @@ def clean_rule(r, i: int) -> dict | None:
 def clean_config(cfg) -> dict:
     cfg = cfg if isinstance(cfg, dict) else {}
     out = dict(DEFAULT_CONFIG)
-    for k in ("enabled", "send_event", "move_to_mql", "notify_only_qualified"):
+    for k in ("enabled", "send_event", "move_to_mql", "notify_only_qualified",
+              "whatsapp_only_qualified", "notify_lead_unqualified"):
         if k in cfg:
             out[k] = bool(cfg[k])
     out["mode"] = cfg.get("mode") if cfg.get("mode") in MODES else DEFAULT_CONFIG["mode"]
@@ -97,6 +111,12 @@ def clean_config(cfg) -> dict:
         pass
     name = str(cfg.get("event_name") or "").strip()
     out["event_name"] = name if EVENT_NAME_SHAPE.fullmatch(name) else DEFAULT_EVENT
+    out["unqualified_message"] = str(cfg.get("unqualified_message") or "").strip()[:2000]
+    url = str(cfg.get("unqualified_redirect_url") or "").strip()[:500]
+    out["unqualified_redirect_url"] = url if url.startswith(("http://", "https://")) else ""
+    out["unqualified_lead_message"] = (
+        str(cfg.get("unqualified_lead_message") or "").strip()[:1000] or DEFAULT_LEAD_MESSAGE
+    )
     rules = []
     for i, r in enumerate((cfg.get("rules") or [])[:MAX_RULES]):
         c = clean_rule(r, i)
@@ -109,6 +129,14 @@ def clean_config(cfg) -> dict:
         seen.add(r["id"])
     out["rules"] = rules
     return out
+
+
+def lead_message(template: str, nome: str) -> str:
+    """Troca {nome} pelo primeiro nome; sem nome, some com o vocativo ("Olá!")."""
+    first = (nome or "").strip().split(" ")[0]
+    if first:
+        return template.replace("{nome}", first)
+    return re.sub(r",?\s*\{nome\}", "", template)
 
 
 def _selected(answer: str, field: dict | None) -> set[str]:

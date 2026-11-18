@@ -45,6 +45,7 @@ from app.routers import config as config_router
 from app.routers import contacts as contacts_router
 from app.routers import conversions as conversions_router
 from app.routers import crm as crm_router
+from app.routers import demands as demands_router
 from app.routers import evolution as evolution_router
 from app.routers import forms as forms_router
 from app.routers import journeys as journeys_router
@@ -88,6 +89,8 @@ app.include_router(crm_router.router, dependencies=_logged_in)
 app.include_router(broadcasts_router.router, dependencies=_logged_in)
 app.include_router(contacts_router.router, dependencies=_logged_in)
 app.include_router(conversions_router.router, dependencies=_logged_in)
+# painel de demandas: o router decide quem ve e quem edita cada uma
+app.include_router(demands_router.router, dependencies=_logged_in)
 # conexao com o Facebook por OAuth, por linha (o router confere o acesso a linha)
 app.include_router(meta_router.router, dependencies=_logged_in)
 

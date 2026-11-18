@@ -5,32 +5,32 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle, ArrowDown, ArrowUp, Bell, Check, ChevronDown, ChevronsDownUp,
   ChevronsUpDown, Copy, Crosshair, Eye, EyeOff, ImageIcon,
-  Keyboard, Layers, ListChecks, Loader2, MonitorPlay, Palette, Plus, Search, Settings2,
+  Keyboard, Layers, ListChecks, Loader2, MessageCircle, MonitorPlay, Palette, Plus, Search, Settings2,
   Shield, Sparkles, Star, Trash2, Upload, X,
 } from './icons';
 import {
-  createForm, testFormNotify, updateForm,
+  createForm, getLinePixel, testFirstContact, testFormNotify, updateForm,
   type FormLine, type LeadForm, type LeadFormField, type LeadFormFieldType,
   type LeadFormSettings, type LeadFormTheme,
 } from './client';
 import {
-  DEFAULT_SETTINGS, DEFAULT_THEME, FIELD_TYPES, FONT_LABEL, FONT_STACK, OPTION_TYPES,
-  RADIUS_LABEL, RADIUS_PX, contrastOn, emptyField, fileToLogoDataUrl, pageBackground,
+  DEFAULT_SETTINGS, DEFAULT_THEME, FIELD_TYPES, FIRST_CONTACT_MESSAGE, FONT_LABEL, FONT_STACK, OPTION_TYPES,
+  RADIUS_LABEL, RADIUS_PX, contrastOn, emptyField, fileToLogoDataUrl, isQuestion, pageBackground,
   withAlpha,
 } from './formKit';
 import { FormAiModal } from './FormAiModal';
 import { Field, INPUT, SettingRow, Toggle } from './editorUi';
 import { SheetsPanel, validSheetsUrl } from './SheetsPanel';
-import { DEFAULT_QUALIFICATION, QualActions, QualCriteria, QualSimulator } from './QualificationPanel';
+import { DEFAULT_QUALIFICATION, QualActions, QualCriteria, QualRouting, QualSimulator } from './QualificationPanel';
 
 type Cat = "geral" | "aparencia" | "perguntas" | "qualificacao" | "comportamento" | "notificacoes" | "integracoes";
 
 const CATS: { id: Cat; label: string; icon: typeof Settings2; desc: string }[] = [
   { id: "geral", label: "Geral", icon: Settings2, desc: "Nome, linha, publicação e link" },
   { id: "aparencia", label: "Aparência", icon: Palette, desc: "Logo, cores, fonte e formas" },
-  { id: "perguntas", label: "Perguntas", icon: ListChecks, desc: "Campos que o lead responde" },
-  { id: "qualificacao", label: "Qualificação", icon: Star, desc: "Critérios de lead qualificado e o evento QualifiedLead" },
-  { id: "comportamento", label: "Comportamento", icon: MonitorPlay, desc: "Layout, capa e pós-envio" },
+  { id: "perguntas", label: "Perguntas", icon: ListChecks, desc: "A jornada: perguntas e telas de conteúdo" },
+  { id: "qualificacao", label: "Qualificação", icon: Star, desc: "Critérios, destino de cada lead e o evento QualifiedLead" },
+  { id: "comportamento", label: "Comportamento", icon: MonitorPlay, desc: "Layout, capa, pós-envio e primeiro atendimento" },
   { id: "notificacoes", label: "Notificações", icon: Bell, desc: "WhatsApp e webhook" },
   { id: "integracoes", label: "Integrações", icon: Crosshair, desc: "Jornada, Pixel, Conversions API e Google Sheets" },
 ];
@@ -98,6 +98,32 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       setNotifyTest({ busy: false, ok: false, msg: e instanceof Error ? e.message : "Não foi possível enviar o teste." });
     }
   }
+  // teste do primeiro atendimento: manda a mensagem da tela pro número digitado
+  const [fcPhone, setFcPhone] = useState("");
+  const [fcTest, setFcTest] = useState<{ busy: boolean; ok?: boolean; msg?: string }>({ busy: false });
+
+  async function sendFirstContactTest() {
+    setFcTest({ busy: true });
+    try {
+      await testFirstContact({ wa_number_id: d.wa_number_id, phone: fcPhone, title: d.title, message: d.settings.first_contact_message });
+      setFcTest({ busy: false, ok: true, msg: "Mensagem enviada. Confira o WhatsApp desse número." });
+    } catch (e) {
+      setFcTest({ busy: false, ok: false, msg: e instanceof Error ? e.message : "Não foi possível enviar o teste." });
+    }
+  }
+  // Pixel cadastrado em Rastreamento para a linha escolhida (o token não vem)
+  const [linePixel, setLinePixel] = useState<{ pixel_id: string; token_set: boolean } | null>(null);
+  useEffect(() => {
+    setLinePixel(null);
+    if (!d.wa_number_id) return;
+    let alive = true;
+    getLinePixel(d.wa_number_id).then((p) => { if (alive) setLinePixel(p); }).catch(() => { /* sem acesso: fica sem status */ });
+    return () => { alive = false; };
+  }, [d.wa_number_id]);
+  const questions = fields.filter(isQuestion);
+  const pixelReady = d.settings.use_line_pixel
+    ? !!linePixel?.pixel_id && linePixel.token_set
+    : !!d.pixel_id.trim() && (!!d.capi_token.trim() || !!form?.capi_token__set);
   const searchRef = useRef<HTMLInputElement>(null);
   const logoInput = useRef<HTMLInputElement>(null);
 
@@ -162,9 +188,13 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
   async function save() {
     if (!d.title.trim()) { setCat("geral"); setErr("Dê um nome interno ao formulário."); return; }
     if (!d.wa_number_id) { setCat("geral"); setErr("Escolha a linha (cliente) que recebe os leads."); return; }
-    if (!fields.length) { setCat("perguntas"); setErr("Adicione ao menos uma pergunta."); return; }
+    if (!questions.length) { setCat("perguntas"); setErr("Adicione ao menos uma pergunta."); return; }
     const semLabel = fields.findIndex((f) => !f.label.trim());
-    if (semLabel >= 0) { setCat("perguntas"); setErr(`Escreva o texto da pergunta ${semLabel + 1}.`); return; }
+    if (semLabel >= 0) {
+      setCat("perguntas");
+      setErr(isQuestion(fields[semLabel]) ? `Escreva o texto da pergunta ${semLabel + 1}.` : `Dê um título ao conteúdo ${semLabel + 1}.`);
+      return;
+    }
     const semOpcao = fields.findIndex((f) => OPTION_TYPES.includes(f.type) && f.options.length < 2);
     if (semOpcao >= 0) {
       setCat("perguntas");
@@ -173,7 +203,7 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
     if (d.settings.sheets_enabled && !validSheetsUrl(d.settings.sheets_url)) {
       setCat("integracoes"); setErr("Cole a URL do app da Web do Apps Script (termina em /exec) ou desligue a planilha."); return;
     }
-    if ((d.capi_token.trim() || form?.capi_token__set) && !d.pixel_id.trim()) {
+    if (!d.settings.use_line_pixel && (d.capi_token.trim() || form?.capi_token__set) && !d.pixel_id.trim()) {
       setCat("integracoes"); setErr("Para usar o token da CAPI, preencha também o ID do Pixel."); return;
     }
     setBusy(true); setErr("");
@@ -397,9 +427,9 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       ),
     },
     {
-      id: "campos", cat: "perguntas", icon: ListChecks, title: "Perguntas do formulário",
-      desc: "11 tipos de campo — os tipos e-mail e telefone alimentam o lead do CRM",
-      kw: "pergunta campo tipo obrigatorio opcoes placeholder ajuda nota data numero lista",
+      id: "campos", cat: "perguntas", icon: ListChecks, title: "Jornada do formulário",
+      desc: "Perguntas que qualificam e telas de conteúdo que aumentam a consciência do lead, na ordem em que aparecem",
+      kw: "pergunta campo tipo obrigatorio opcoes placeholder ajuda nota data numero lista conteudo consciencia jornada video imagem texto educar",
       body: (
         <div className="space-y-2.5">
           {fields.map((q, i) => (
@@ -418,14 +448,20 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
               className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-dashed border-wa-500/40 bg-wa-500/5 py-3 text-sm font-semibold text-wa-500 transition-colors hover:bg-wa-500/10">
               <Plus className="size-4" /> Adicionar pergunta
             </button>
+            <button type="button" title="Tela com título, texto e imagem ou vídeo, sem resposta"
+              onClick={() => setFields([...fields, { ...emptyField(Date.now()), type: "info", required: false, content: "", media_url: "" }])}
+              className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-wa-500/40 px-4 py-3 text-sm font-semibold text-wa-500 transition-colors hover:bg-wa-500/10">
+              <Layers className="size-4" /> Adicionar conteúdo
+            </button>
             <button type="button" onClick={() => setAiOpen(true)}
               className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-ink-700 px-4 py-3 text-sm font-semibold text-ink-400 transition-colors hover:border-wa-500/40 hover:text-ink-100">
               <Sparkles className="size-4" /> Gerar com IA
             </button>
           </div>
           <p className="text-[11px] text-ink-400">
-            {fields.length} de 30 perguntas. Formulários curtos (3 a 5) convertem melhor.
-            Gerar com IA reescreve as perguntas seguindo um método de qualificação (BANT, SPIN…).
+            {questions.length} pergunta(s) e {fields.length - questions.length} tela(s) de conteúdo — até 30 itens.
+            Intercale um conteúdo curto antes das perguntas decisivas: o lead entende o porquê e chega mais preparado ao comercial.
+            Gerar com IA reescreve a jornada seguindo um método de qualificação (BANT, SPIN…).
           </p>
         </div>
       ),
@@ -441,8 +477,15 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       desc: "Evento QualifiedLead no Meta, etapa no CRM e aviso",
       kw: "qualifiedlead evento conversao meta capi pixel mql crm aviso qualificado",
       body: <QualActions q={d.qualification} onChange={(v) => set("qualification", v)}
-        pixelReady={!!d.pixel_id.trim() && (!!d.capi_token.trim() || !!form?.capi_token__set)}
+        pixelReady={pixelReady}
         notifySet={!!d.whatsapp_notify.trim()} />,
+    },
+    {
+      id: "qual-destino", cat: "qualificacao", icon: MonitorPlay, title: "Destino de cada lead",
+      desc: "Qualificado vai para o WhatsApp na hora; não qualificado pode ficar só na tela final",
+      kw: "whatsapp redirecionar bloquear barrar nao qualificado desqualificado destino tela final confirmacao linha comercial",
+      body: <QualRouting q={d.qualification} onChange={(v) => set("qualification", v)}
+        settings={d.settings} onSettings={setCfg} notifySet={!!d.whatsapp_notify.trim()} />,
     },
     {
       id: "qual-simulacao", cat: "qualificacao", icon: Sparkles, title: "Testar e melhorar",
@@ -503,6 +546,11 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
             help="Tem prioridade sobre o redirecionamento abaixo.">
             <Toggle checked={d.settings.whatsapp_redirect} onChange={(v) => setCfg({ whatsapp_redirect: v })} />
           </SettingRow>
+          {d.qualification.whatsapp_only_qualified && (
+            <p className="rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3 text-xs leading-relaxed text-ink-400">
+              Só o lead qualificado é redirecionado: quem não qualifica segue o que está em Qualificação → Destino de cada lead.
+            </p>
+          )}
           {d.settings.whatsapp_redirect && (
             <>
               <Field label="Número do WhatsApp" hint="Vazio = o número da própria linha (ela precisa ter sido conectada, senão o número não é conhecido e o lead fica na tela de obrigado).">
@@ -539,6 +587,80 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
               <textarea className={`${INPUT} min-h-[60px] resize-y`} value={d.settings.consent_text}
                 onChange={(e) => setCfg({ consent_text: e.target.value })} />
             </Field>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "primeiro-atendimento", cat: "comportamento", icon: MessageCircle, title: "Primeiro atendimento",
+      desc: "Mensagem automática para o lead no WhatsApp logo depois do envio",
+      kw: "primeiro atendimento mensagem automatica boas vindas lead whatsapp resposta automatica saudacao",
+      body: (
+        <>
+          <SettingRow label="Enviar mensagem de primeiro atendimento"
+            hint="A linha manda esta mensagem para o WhatsApp que o lead digitou, sendo ele redirecionado ou não."
+            help="Sai pela instância (Evolution) da própria linha e aparece na conversa do CRM. O formulário precisa ter uma pergunta do tipo Telefone/WhatsApp.">
+            <Toggle checked={d.settings.first_contact_enabled} onChange={(v) => setCfg({ first_contact_enabled: v })} />
+          </SettingRow>
+          {d.settings.first_contact_enabled && (
+            <>
+              {!fields.some((f) => f.type === "phone") && (
+                <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-300">
+                  Este formulário não tem pergunta de Telefone/WhatsApp. Sem ela, não há para onde enviar a mensagem.
+                </p>
+              )}
+              <Field label="Mensagem"
+                hint="Variáveis: {nome} (primeiro nome), {nome_completo} e {formulario}. Se o lead não informar o nome, o {nome} some junto com a vírgula.">
+                <textarea className={`${INPUT} min-h-[90px] resize-y`} value={d.settings.first_contact_message}
+                  placeholder={FIRST_CONTACT_MESSAGE} maxLength={1500}
+                  onChange={(e) => setCfg({ first_contact_message: e.target.value })} />
+                <p className="mt-1 text-[11px] text-ink-400">Vazio = a mensagem de exemplo acima.</p>
+              </Field>
+              <SettingRow label="Esperar antes de enviar"
+                hint={d.settings.first_contact_delay
+                  ? `${d.settings.first_contact_delay < 60 ? `${d.settings.first_contact_delay}s` : `${Math.floor(d.settings.first_contact_delay / 60)} min${d.settings.first_contact_delay % 60 ? ` ${d.settings.first_contact_delay % 60}s` : ""}`} depois do envio.${d.settings.whatsapp_redirect ? " Dá tempo do lead mandar a mensagem pronta antes, e a conversa fica na ordem certa." : ""}`
+                  : `Na hora.${d.settings.whatsapp_redirect ? " Com o redirecionamento ligado, a mensagem pode chegar antes da do lead." : ""}`}
+                help="A espera fica na memória do servidor: se ele reiniciar nesse meio tempo, a mensagem não sai.">
+                <select className={`${INPUT} w-36`} value={d.settings.first_contact_delay}
+                  onChange={(e) => setCfg({ first_contact_delay: Number(e.target.value) })}>
+                  {[[0, "Na hora"], [15, "15 segundos"], [30, "30 segundos"], [60, "1 minuto"], [120, "2 minutos"],
+                    [300, "5 minutos"], [600, "10 minutos"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </SettingRow>
+              <SettingRow label="Quem recebe"
+                hint={d.qualification.enabled
+                  ? "Com “só qualificados”, quem não bate os critérios da aba Qualificação não recebe."
+                  : "Os critérios ficam na aba Qualificação. Sem eles, todo mundo recebe."}
+                help="Quem já recebe a confirmação de não qualificado (Qualificação → Destino de cada lead) não ganha esta segunda mensagem.">
+                <div className="flex gap-1.5">
+                  {([["all", "Todos"], ["qualified", "Só qualificados"]] as const).map(([v, l]) => (
+                    <button key={v} type="button" onClick={() => setCfg({ first_contact_audience: v })}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        d.settings.first_contact_audience === v ? "border-wa-500 bg-wa-500/15 text-ink-100" : "border-ink-700 text-ink-400 hover:bg-white/5"}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </SettingRow>
+              <Field label="Testar" hint="Envia agora a mensagem da tela (com “Maria Silva” no nome) para este número, mesmo sem salvar.">
+                <div className="flex gap-2">
+                  <input className={INPUT} value={fcPhone} placeholder="31 99999-9999"
+                    onChange={(e) => { setFcPhone(e.target.value); setFcTest({ busy: false }); }} />
+                  <button type="button" onClick={() => void sendFirstContactTest()}
+                    disabled={fcTest.busy || fcPhone.replace(/\D/g, "").length < 10 || !d.wa_number_id}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-ink-700 px-3 text-xs font-medium text-ink-200 transition-colors hover:bg-white/5 disabled:opacity-40">
+                    {fcTest.busy ? <Loader2 className="size-3.5 animate-spin" /> : <MessageCircle className="size-3.5" />}
+                    Enviar teste
+                  </button>
+                </div>
+                {fcTest.msg && (
+                  <p className={`mt-1.5 flex items-start gap-1.5 text-[11px] ${fcTest.ok ? "text-wa-500" : "text-red-300"}`}>
+                    {fcTest.ok ? <Check className="mt-px size-3.5 shrink-0" /> : <AlertCircle className="mt-px size-3.5 shrink-0" />}
+                    {fcTest.msg}
+                  </p>
+                )}
+              </Field>
+            </>
           )}
         </>
       ),
@@ -617,24 +739,47 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
       kw: "pixel meta facebook capi conversions api token evento lead rastreamento teste test event code",
       body: (
         <>
-          <Field label="Pixel do Meta (ID)" hint="Dispara PageView ao abrir e Lead na conversão.">
-            <input className={INPUT} value={d.pixel_id} placeholder="123456789012345 (vazio = não rastreia)"
-              onChange={(e) => set("pixel_id", e.target.value)} />
-          </Field>
-          <Field label="Token da Conversions API (CAPI)"
-            hint="Envia o Lead também pelo servidor. Precisa do Pixel preenchido.">
-            <div className="relative">
-              <input className={`${INPUT} pr-10`} type={showToken ? "text" : "password"}
-                autoComplete="off" spellCheck={false} value={d.capi_token}
-                placeholder={form?.capi_token__set ? "•••••• já configurado — deixe vazio para manter" : "EAAG… (gerado no Gerenciador de Eventos)"}
-                onChange={(e) => set("capi_token", e.target.value)} />
-              <button type="button" onClick={() => setShowToken(!showToken)}
-                title={showToken ? "Esconder token" : "Mostrar token"}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-ink-400 hover:text-ink-100">
-                {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
-            </div>
-          </Field>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-ink-800 bg-ink-950/50 px-4 py-3">
+            <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-wa-500" checked={d.settings.use_line_pixel}
+              onChange={(e) => setCfg({ use_line_pixel: e.target.checked })} />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">Usar o Pixel cadastrado em Rastreamento</span>
+              <span className="mt-0.5 block text-xs leading-relaxed text-ink-400">
+                O formulário usa o Pixel / Dataset e o token da API da linha, sem precisar colar de novo aqui.
+                {linePixel?.pixel_id
+                  ? <> Pixel da linha: <code className="font-mono text-wa-500">{linePixel.pixel_id}</code>
+                      {linePixel.token_set ? " · token configurado" : " · sem token (só o Pixel do navegador dispara)"}.</>
+                  : linePixel ? " Esta linha ainda não tem Pixel em Rastreamento." : ""}
+              </span>
+            </span>
+          </label>
+          {d.settings.use_line_pixel && linePixel && !linePixel.pixel_id && (
+            <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-300">
+              Cadastre o Pixel e o token na aba Rastreamento desta linha. Enquanto isso, o formulário não envia eventos ao Meta.
+            </p>
+          )}
+          {!d.settings.use_line_pixel && (
+            <>
+              <Field label="Pixel do Meta (ID)" hint="Dispara PageView ao abrir e Lead na conversão.">
+                <input className={INPUT} value={d.pixel_id} placeholder="123456789012345 (vazio = não rastreia)"
+                  onChange={(e) => set("pixel_id", e.target.value)} />
+              </Field>
+              <Field label="Token da Conversions API (CAPI)"
+                hint="Envia o Lead também pelo servidor. Precisa do Pixel preenchido.">
+                <div className="relative">
+                  <input className={`${INPUT} pr-10`} type={showToken ? "text" : "password"}
+                    autoComplete="off" spellCheck={false} value={d.capi_token}
+                    placeholder={form?.capi_token__set ? "•••••• já configurado — deixe vazio para manter" : "EAAG… (gerado no Gerenciador de Eventos)"}
+                    onChange={(e) => set("capi_token", e.target.value)} />
+                  <button type="button" onClick={() => setShowToken(!showToken)}
+                    title={showToken ? "Esconder token" : "Mostrar token"}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-ink-400 hover:text-ink-100">
+                    {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
+              </Field>
+            </>
+          )}
           <Field label="Código de evento de teste (test_event_code)"
             hint="Preenchido, o Lead da CAPI aparece em Eventos de teste no Gerenciador de Eventos e não entra na otimização. Apague depois de testar.">
             <input className={INPUT} value={d.settings.meta_test_event_code} placeholder="TEST12345 (vazio = produção)"
@@ -783,7 +928,7 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
               <Eye className="size-3.5" /> Prévia ao vivo
             </p>
             <LivePreview logo={d.logo_url} headline={d.headline || d.title} description={d.description}
-              theme={d.theme} settings={d.settings} field={fields[0]} total={fields.length} />
+              theme={d.theme} settings={d.settings} field={questions[0]} total={questions.length} />
             <p className="mt-3 text-[11px] leading-relaxed text-ink-400">
               Prévia da capa. Abra o link público para ver o formulário inteiro com as transições.
             </p>
@@ -804,7 +949,9 @@ export function FormEditorModal({ form, clients, defaultLine = 0, draft, onClose
             </p>
           ) : (
             <p className="text-xs text-ink-400">
-              {fields.length} pergunta(s) · {d.settings.layout === "step" ? "uma por vez" : "página única"}
+              {questions.length} pergunta(s){fields.length > questions.length ? ` · ${fields.length - questions.length} conteúdo(s)` : ""}
+              {" · "}{d.settings.layout === "step" ? "uma por vez" : "página única"}
+              {d.qualification.whatsapp_only_qualified ? " · WhatsApp só para qualificados" : ""}
               {d.logo_url ? " · com logo" : ""}{d.active ? "" : " · pausado"}
               {d.qualification.enabled ? ` · ${d.qualification.rules.length} regra(s) de qualificação` : ""}
               {d.settings.sheets_enabled ? " · planilha ligada" : ""}
@@ -888,6 +1035,7 @@ function FieldCard({ f, index, total, onPatch, onMove, onRemove, onDuplicate }: 
   const [open, setOpen] = useState(false);
   const meta = FIELD_TYPES.find((t) => t.v === f.type);
   const needsOptions = OPTION_TYPES.includes(f.type);
+  const info = !isQuestion(f);
 
   return (
     <div className="rounded-xl border border-ink-800 bg-ink-950/50 p-3">
@@ -895,7 +1043,7 @@ function FieldCard({ f, index, total, onPatch, onMove, onRemove, onDuplicate }: 
         <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-white/5 font-mono text-[11px] font-bold text-ink-400">
           {index + 1}
         </span>
-        <input className={`${INPUT} flex-1`} value={f.label} placeholder="Texto da pergunta"
+        <input className={`${INPUT} flex-1`} value={f.label} placeholder={info ? "Título do conteúdo" : "Texto da pergunta"}
           onChange={(e) => onPatch({ label: e.target.value })} />
         <div className="flex items-center">
           <button type="button" onClick={() => onMove(-1)} disabled={index === 0} title="Subir"
@@ -914,23 +1062,47 @@ function FieldCard({ f, index, total, onPatch, onMove, onRemove, onDuplicate }: 
           value={f.type}
           onChange={(e) => {
             const type = e.target.value as LeadFormFieldType;
-            onPatch({ type, options: OPTION_TYPES.includes(type) ? f.options : [] });
+            onPatch({
+              type, options: OPTION_TYPES.includes(type) ? f.options : [],
+              ...(type === "info" ? { required: false } : info ? { required: true } : {}),
+            });
             if (OPTION_TYPES.includes(type)) setOpen(true);
           }}>
           {FIELD_TYPES.map((t) => <option key={t.v} value={t.v}>{t.l}</option>)}
         </select>
-        <button type="button" onClick={() => onPatch({ required: !f.required })}
-          className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
-            f.required ? "border-wa-500/50 bg-wa-500/10 text-wa-500" : "border-ink-700 text-ink-400 hover:bg-white/5"}`}>
-          {f.required ? "Obrigatória" : "Opcional"}
-        </button>
+        {!info && (
+          <button type="button" onClick={() => onPatch({ required: !f.required })}
+            className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+              f.required ? "border-wa-500/50 bg-wa-500/10 text-wa-500" : "border-ink-700 text-ink-400 hover:bg-white/5"}`}>
+            {f.required ? "Obrigatória" : "Opcional"}
+          </button>
+        )}
         <span className="text-[11px] text-ink-400">{meta?.hint}</span>
-        <button type="button" onClick={() => setOpen(!open)}
-          className="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-ink-400 hover:text-ink-100">
-          {open ? "Menos opções" : "Mais opções"}
-          <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
+        {!info && (
+          <button type="button" onClick={() => setOpen(!open)}
+            className="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-ink-400 hover:text-ink-100">
+            {open ? "Menos opções" : "Mais opções"}
+            <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+        )}
       </div>
+
+      {info && (
+        <div className="mt-2 space-y-2">
+          <div>
+            <label className="text-[11px] font-medium text-ink-400">Texto — o que o lead precisa entender antes da próxima pergunta</label>
+            <textarea className={`${INPUT} mt-1 min-h-[80px] resize-y`} value={f.content || ""}
+              placeholder="Ex.: 7 em cada 10 clínicas perdem pacientes por demorar a responder. Nas próximas perguntas vamos ver como está o seu atendimento."
+              onChange={(e) => onPatch({ content: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-[11px] font-medium text-ink-400">Imagem ou vídeo (opcional)</label>
+            <input className={`${INPUT} mt-1`} value={f.media_url || ""}
+              placeholder="Link do YouTube/Vimeo ou URL de uma imagem"
+              onChange={(e) => onPatch({ media_url: e.target.value.trim() })} />
+          </div>
+        </div>
+      )}
 
       {needsOptions && (
         <div className="mt-2">
@@ -946,7 +1118,7 @@ function FieldCard({ f, index, total, onPatch, onMove, onRemove, onDuplicate }: 
         </div>
       )}
 
-      {open && (
+      {open && !info && (
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <div>
             <label className="text-[11px] font-medium text-ink-400">Dica dentro do campo</label>

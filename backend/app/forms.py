@@ -48,7 +48,10 @@ from app.models import Contact, FormPartial, FormResponse, LeadForm, WaNumber
 log = logging.getLogger(__name__)
 
 FIELD_TYPES = ("text", "email", "phone", "textarea", "number", "date", "url",
-               "choice", "multi", "select", "rating")
+               "choice", "multi", "select", "rating", "info")
+# "info" nao e pergunta: e uma tela de conteudo no meio da jornada (titulo, texto
+# e midia) que prepara o lead antes da proxima pergunta. Nao gera resposta.
+CONTENT_TYPE = "info"
 OPTION_TYPES = ("choice", "multi", "select")
 API_VERSION = os.getenv("META_API_VERSION", "v21.0")
 
@@ -81,6 +84,12 @@ DEFAULT_SETTINGS = {
     "whatsapp_redirect": False,
     "whatsapp_phone": "",        # vazio = o numero da propria linha
     "whatsapp_message": "Olá! Acabei de preencher o formulário e quero falar com vocês.",
+    # primeiro atendimento: a linha manda sozinha uma mensagem pro lead logo
+    # depois do envio — com ou sem redirecionamento (ver send_first_contact)
+    "first_contact_enabled": False,
+    "first_contact_message": "",     # vazio = FIRST_CONTACT_MESSAGE
+    "first_contact_delay": 30,       # segundos; da tempo do lead mandar a msg pronta do wa.me
+    "first_contact_audience": "all",  # all | qualified
     # carrega a tag de jornada da linha na pagina publica (TL_ID, UTMs, click ids)
     "track_journey": True,
     # Google Sheets via Apps Script (ver app/sheets.py): uma linha por resposta
@@ -88,6 +97,9 @@ DEFAULT_SETTINGS = {
     "sheets_url": "",
     "sheets_tab": sheets.DEFAULT_TAB,
     "sheets_secret": "",             # confere no script; nunca vai pra pagina publica
+    # usa o Pixel/Dataset e o token da CAPI da linha (aba Rastreamento) no lugar
+    # dos campos proprios do formulario
+    "use_line_pixel": False,
 }
 LAYOUTS = ("step", "page")
 PUBLIC_SETTINGS = (
@@ -96,6 +108,12 @@ PUBLIC_SETTINGS = (
     "whatsapp_redirect", "track_journey",
 )
 LOGO_MAX_CHARS = 400_000
+FIRST_CONTACT_MESSAGE = (
+    "Olá, {nome}! Recebemos o seu formulário. 😊\n"
+    "Sou da equipe e vou te atender por aqui. Já estou olhando as suas respostas."
+)
+FIRST_CONTACT_AUDIENCES = ("all", "qualified")
+FIRST_CONTACT_MAX_DELAY = 600
 THANK_YOU = "Obrigado! Em breve entraremos em contato. 💚"
 
 
@@ -117,7 +135,7 @@ def clean_fields(fields) -> list[dict]:
         if not isinstance(f, dict):
             continue
         ftype = f.get("type") if f.get("type") in FIELD_TYPES else "text"
-        out.append({
+        item = {
             "id": str(f.get("id") or f"q{i + 1}")[:40],
             "label": (str(f.get("label") or f"Pergunta {i + 1}")).strip()[:200],
             "type": ftype,
@@ -126,7 +144,13 @@ def clean_fields(fields) -> list[dict]:
             "help": (str(f.get("help") or "")).strip()[:300],
             "options": [str(o).strip()[:100] for o in (f.get("options") or []) if str(o).strip()][:20]
             if ftype in OPTION_TYPES else [],
-        })
+        }
+        if ftype == CONTENT_TYPE:
+            media = str(f.get("media_url") or "").strip()[:500]
+            item["required"] = False
+            item["content"] = str(f.get("content") or "").strip()[:2000]
+            item["media_url"] = media if media.startswith(("http://", "https://")) else ""
+        out.append(item)
     # ids repetidos embaralhariam as respostas
     seen: set[str] = set()
     for i, f in enumerate(out):
@@ -134,6 +158,21 @@ def clean_fields(fields) -> list[dict]:
             f["id"] = f"{f['id']}_{i}"
         seen.add(f["id"])
     return out[:30]
+
+
+def question_fields(fields) -> list[dict]:
+    """So o que o lead responde — sem as telas de conteudo."""
+    return [f for f in clean_fields(fields) if f["type"] != CONTENT_TYPE]
+
+
+async def meta_target(session: AsyncSession, form: LeadForm, number: WaNumber | None) -> tuple[str, str]:
+    """(pixel_id, token da CAPI) deste formulario: os da linha (Rastreamento)
+    quando `use_line_pixel` esta marcado, senao os campos do proprio formulario."""
+    if clean_settings(form.settings)["use_line_pixel"]:
+        cfg = numbers_service.effective_cfg(await settings_store.load(session), number)
+        pixel = re.sub(r"\D", "", str(cfg.get("meta_dataset_id") or ""))[:32]
+        return pixel, str(cfg.get("meta_capi_token") or "").strip()
+    return form.pixel_id or "", form.capi_token or ""
 
 
 def clean_theme(theme) -> dict:
@@ -149,8 +188,9 @@ def clean_theme(theme) -> dict:
 
 
 def clean_settings(settings) -> dict:
+    settings = settings if isinstance(settings, dict) else {}
     out = dict(DEFAULT_SETTINGS)
-    for k, v in (settings or {}).items():
+    for k, v in settings.items():
         if k not in DEFAULT_SETTINGS:
             continue
         default = DEFAULT_SETTINGS[k]
@@ -179,6 +219,11 @@ def clean_settings(settings) -> dict:
     out["sheets_tab"] = out["sheets_tab"][:100] or sheets.DEFAULT_TAB
     if not re.fullmatch(r"[A-Za-z0-9_\-]{16,64}", out["sheets_secret"]):
         out["sheets_secret"] = ""
+    # a mensagem pode ter varias linhas e passar dos 500 do resto dos textos
+    out["first_contact_message"] = str(settings.get("first_contact_message") or "").strip()[:1500]
+    out["first_contact_delay"] = max(0, min(out["first_contact_delay"], FIRST_CONTACT_MAX_DELAY))
+    if out["first_contact_audience"] not in FIRST_CONTACT_AUDIENCES:
+        out["first_contact_audience"] = DEFAULT_SETTINGS["first_contact_audience"]
     return out
 
 
@@ -306,7 +351,7 @@ def line_phone(number: WaNumber | None) -> str:
     )
 
 
-def public_payload(form: LeadForm, number: WaNumber | None) -> dict:
+def public_payload(form: LeadForm, number: WaNumber | None, pixel_id: str | None = None) -> dict:
     settings = clean_settings(form.settings)
     wa_phone = settings["whatsapp_phone"] or line_phone(number)
     out = {
@@ -316,7 +361,7 @@ def public_payload(form: LeadForm, number: WaNumber | None) -> dict:
         "fields": clean_fields(form.fields),
         "theme": clean_theme(form.theme),
         "thank_you": form.thank_you or THANK_YOU,
-        "pixel_id": form.pixel_id or "",
+        "pixel_id": (form.pixel_id or "") if pixel_id is None else pixel_id,
         "logo_url": form.logo_url or "",
         "settings": {k: v for k, v in settings.items() if k in PUBLIC_SETTINGS},
         # so o que a pagina precisa: a chave publica da tag e o destino do WhatsApp
@@ -338,7 +383,7 @@ class SubmitError(ValueError):
 def normalize_answers(form: LeadForm, answers: dict) -> tuple[dict, dict]:
     clean: dict[str, str] = {}
     labels: dict[str, str] = {}
-    for f in clean_fields(form.fields):
+    for f in question_fields(form.fields):
         raw = answers.get(f["id"], "")
         if isinstance(raw, (list, tuple)):
             allowed = set(f["options"])
@@ -364,7 +409,7 @@ SESSION_KEY_SHAPE = re.compile(r"[A-Za-z0-9_-]{8,64}")
 def partial_answers(form: LeadForm, answers: dict) -> dict:
     """Respostas do jeito que estao, sem validar: o rascunho pode estar no meio."""
     out: dict[str, str] = {}
-    for f in clean_fields(form.fields):
+    for f in question_fields(form.fields):
         raw = answers.get(f["id"], "")
         if isinstance(raw, (list, tuple)):
             v = ", ".join(str(x).strip() for x in raw if str(x).strip())
@@ -507,21 +552,23 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
     await session.commit()
 
     # avisos depois do commit: o lead ja esta salvo, aviso lento nao segura a tela
-    task = asyncio.create_task(_after_submit(form.id, response.id, clean, labels, nome, phone, email, ctx))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    schedule(_after_submit(form.id, response.id, clean, labels, nome, phone, email, ctx))
 
     # o navegador dispara o mesmo evento no Pixel, com o mesmo event_id (o Meta deduplica)
     qualified_event = None
-    if response.qualified and qcfg["send_event"] and form.pixel_id:
+    pixel_id, _ = await meta_target(session, form, number)
+    if response.qualified and qcfg["send_event"] and pixel_id:
         qualified_event = {
             "name": qcfg["event_name"],
             "event_id": qualified_event_id(response.id),
             "standard": qcfg["event_name"] in ql.STANDARD_EVENTS,
         }
 
+    # lead barrado: nao vai pro WhatsApp nem pro redirecionamento padrao (que pode
+    # ser um wa.me) — fica na tela final dele, com destino proprio se houver
+    blocked = whatsapp_blocked(qcfg, response.qualified)
     whatsapp = None
-    if settings["whatsapp_redirect"]:
+    if settings["whatsapp_redirect"] and not blocked:
         target = settings["whatsapp_phone"] or line_phone(number)
         if target:
             msg = settings["whatsapp_message"]
@@ -531,11 +578,17 @@ async def submit(session: AsyncSession, form: LeadForm, answers: dict, ctx: dict
     return {
         "ok": True,
         "id": response.id,
-        "thank_you": form.thank_you or THANK_YOU,
-        "redirect_url": whatsapp or settings["redirect_url"],
+        "thank_you": (blocked and qcfg["unqualified_message"]) or form.thank_you or THANK_YOU,
+        "redirect_url": qcfg["unqualified_redirect_url"] if blocked else (whatsapp or settings["redirect_url"]),
         "redirect_delay": settings["redirect_delay"],
         "qualified_event": qualified_event,
     }
+
+
+def whatsapp_blocked(qcfg: dict, qualified: bool | None) -> bool:
+    """O formulario so deixa o qualificado ir pro WhatsApp e este nao qualificou.
+    Sem classificacao (None) ninguem e barrado."""
+    return bool(qcfg["enabled"] and qcfg["whatsapp_only_qualified"] and qualified is False)
 
 
 # referencia forte das tasks de pos-envio: sem ela o GC pode recolher no meio
@@ -565,18 +618,37 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
         response = await session.get(FormResponse, response_id)
         qcfg = ql.clean_config(form.qualification)
         qualified = response.qualified if response is not None else None
+        blocked = whatsapp_blocked(qcfg, qualified)
         skip_notify = qcfg["enabled"] and qcfg["notify_only_qualified"] and qualified is False
         if form.whatsapp_notify and number is not None and not skip_notify:
             try:
                 await send_notify(
-                    session, number, form.whatsapp_notify, notify_text(form.title, resumo, qualified=qualified),
+                    session, number, form.whatsapp_notify,
+                    notify_text(form.title, resumo, qualified=qualified, blocked=blocked),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: aviso no WhatsApp falhou: %s", form.id, exc)
 
-        if form.pixel_id and form.capi_token:
+        # lead barrado: so uma confirmacao de que o formulario chegou, se ligada
+        if blocked and qcfg["notify_lead_unqualified"] and number is not None and phone:
+            contact = await session.get(Contact, response.contact_id) if response.contact_id else None
+            to = contact.wa_id if contact is not None and (contact.wa_id or "").isdigit() else phone
             try:
-                await send_capi_lead(form, nome, email, phone, ctx)
+                await send_notify(session, number, to, ql.lead_message(qcfg["unqualified_lead_message"], nome))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("formulario %s: confirmação ao lead não qualificado falhou: %s", form.id, exc)
+
+        settings = clean_settings(form.settings)
+        # quem ja recebeu a confirmacao de nao qualificado nao ganha uma segunda mensagem
+        got_unqualified_msg = blocked and qcfg["notify_lead_unqualified"]
+        if (number is not None and phone and response is not None and not got_unqualified_msg
+                and first_contact_applies(settings, qualified)):
+            schedule(send_first_contact(form.id, response.id, phone, nome, settings["first_contact_delay"]))
+
+        pixel_id, capi_token = await meta_target(session, form, number)
+        if pixel_id and capi_token:
+            try:
+                await send_capi_lead(form, nome, email, phone, ctx, target=(pixel_id, capi_token))
             except Exception as exc:  # noqa: BLE001
                 log.warning("formulario %s: CAPI falhou: %s", form.id, exc)
 
@@ -597,10 +669,64 @@ async def _after_submit(form_id, response_id, clean, labels, nome, phone, email,
                 log.warning("formulario %s: webhook falhou: %s", form.id, exc)
 
 
-def notify_text(title: str, resumo: str, test: bool = False, qualified: bool | None = None) -> str:
+def schedule(coro) -> None:
+    task = asyncio.create_task(coro)
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
+def first_contact_applies(settings: dict, qualified: bool | None) -> bool:
+    """Primeiro atendimento ligado e o lead esta no publico escolhido. Sem
+    classificacao (None) o publico "so qualificados" nao barra ninguem."""
+    if not settings["first_contact_enabled"]:
+        return False
+    return not (settings["first_contact_audience"] == "qualified" and qualified is False)
+
+
+def first_contact_text(template: str, nome: str, title: str) -> str:
+    """{nome} = primeiro nome (sem nome, some o vocativo), {nome_completo} e {formulario}."""
+    text = (template or "").strip() or FIRST_CONTACT_MESSAGE
+    text = text.replace("{formulario}", title or "").replace("{nome_completo}", (nome or "").strip())
+    return ql.lead_message(text, nome)
+
+
+async def send_first_contact(form_id: int, response_id: int, phone: str, nome: str, delay: int) -> None:
+    """Mensagem de primeiro atendimento pro lead, pela instancia da linha.
+
+    Espera `delay` segundos antes: quem foi levado ao WhatsApp manda a mensagem
+    pronta primeiro e a resposta da linha chega depois, na ordem natural da
+    conversa. Usa o numero ja conferido no WhatsApp (fix_wa_id) quando ha
+    contato. A espera vive na memoria: um restart do servidor nesse meio perde o envio.
+    """
+    if delay:
+        await asyncio.sleep(delay)
+    async with SessionLocal() as session:
+        form = await session.get(LeadForm, form_id)
+        response = await session.get(FormResponse, response_id)
+        if form is None or response is None or not form.wa_number_id:
+            return
+        number = await session.get(WaNumber, form.wa_number_id)
+        if number is None:
+            return
+        contact = await session.get(Contact, response.contact_id) if response.contact_id else None
+        to = contact.wa_id if contact is not None and (contact.wa_id or "").isdigit() else phone
+        settings = clean_settings(form.settings)
+        try:
+            await send_notify(session, number, to, first_contact_text(settings["first_contact_message"], nome, form.title))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("formulario %s: primeiro atendimento falhou: %s", form.id, exc)
+            return
+        log.info("formulario %s: primeiro atendimento enviado (resposta %s)", form.id, response_id)
+
+
+def notify_text(
+    title: str, resumo: str, test: bool = False, qualified: bool | None = None, blocked: bool = False,
+) -> str:
     if test:
         return f"🧪 *Teste de aviso — formulário \"{title}\"*\n\nAssim chega o aviso de cada nova resposta:\n\n{resumo}"
     tag = {True: "\n✅ *Lead qualificado*", False: "\n⚪ Não qualificado pelos critérios"}.get(qualified, "")
+    if blocked:
+        tag += "\n🚫 Não foi levado ao WhatsApp da linha"
     return f"🔥 *Novo lead no formulário \"{title}\"!*{tag}\n\n{resumo}"
 
 
@@ -623,7 +749,7 @@ SAMPLE_ANSWERS = {
 def sample_resumo(fields) -> str:
     """Resumo com respostas de exemplo, no mesmo formato do aviso real."""
     lines = []
-    for f in clean_fields(fields):
+    for f in question_fields(fields):
         v = f["options"][0] if f["options"] else SAMPLE_ANSWERS.get(f["type"], "Resposta de exemplo")
         lines.append(f"{f['label']}: {v}")
     return "\n".join(lines) or "Seu nome: Maria Silva"
@@ -691,15 +817,19 @@ def capi_user_data(nome: str, email: str, phone: str, ctx: dict) -> dict:
     return data
 
 
-async def send_capi_lead(form: LeadForm, nome: str, email: str, phone: str, ctx: dict) -> None:
+async def send_capi_lead(
+    form: LeadForm, nome: str, email: str, phone: str, ctx: dict, target: tuple[str, str] | None = None,
+) -> None:
     await send_capi_event(form, "Lead", ctx.get("event_id") or secrets.token_hex(16),
-                          nome, email, phone, ctx, {"content_name": form.title})
+                          nome, email, phone, ctx, {"content_name": form.title}, target=target)
 
 
 async def send_capi_event(
     form: LeadForm, event_name: str, event_id: str, nome: str, email: str, phone: str, ctx: dict,
-    custom_data: dict | None = None,
+    custom_data: dict | None = None, target: tuple[str, str] | None = None,
 ) -> None:
+    """`target` = (pixel_id, token) ja resolvido por `meta_target`; sem ele, os do formulario."""
+    pixel_id, token = target or (form.pixel_id, form.capi_token)
     payload = {
         "data": [{
             "event_name": event_name,
@@ -711,12 +841,12 @@ async def send_capi_event(
             "custom_data": custom_data or {},
         }],
         # token no corpo, nao na URL (URL com credencial vaza em log)
-        "access_token": form.capi_token,
+        "access_token": token,
     }
     test_code = clean_settings(form.settings)["meta_test_event_code"]
     if test_code:
         payload["test_event_code"] = test_code
-    url = f"https://graph.facebook.com/{API_VERSION}/{form.pixel_id}/events"
+    url = f"https://graph.facebook.com/{API_VERSION}/{pixel_id}/events"
     async with httpx.AsyncClient(timeout=8) as client:
         r = await client.post(url, json=payload)
     if r.status_code >= 400:
@@ -733,7 +863,9 @@ async def send_qualified_event(session: AsyncSession, form: LeadForm, response: 
     if not qcfg["send_event"] or response.ql_event_status == "sent":
         return response.ql_event_status or "off"
     now = datetime.now(timezone.utc)
-    if not (form.pixel_id and form.capi_token):
+    number = await session.get(WaNumber, form.wa_number_id) if form.wa_number_id else None
+    target = await meta_target(session, form, number)
+    if not all(target):
         response.ql_event_status, response.ql_event_error = "skipped", "Formulário sem Pixel e token da CAPI."
         response.ql_event_at = now
         await session.commit()
@@ -747,7 +879,7 @@ async def send_qualified_event(session: AsyncSession, form: LeadForm, response: 
     }
     try:
         await send_capi_event(form, qcfg["event_name"], qualified_event_id(response.id),
-                              nome, email, phone, ctx, custom)
+                              nome, email, phone, ctx, custom, target=target)
         response.ql_event_status, response.ql_event_error = "sent", None
     except Exception as exc:  # noqa: BLE001
         log.warning("formulario %s: evento %s falhou: %s", form.id, qcfg["event_name"], exc)
@@ -823,7 +955,7 @@ async def push_to_sheets(session: AsyncSession, form: LeadForm, response: FormRe
     contact = await session.get(Contact, response.contact_id) if response.contact_id else None
     columns = sheets.build_columns(
         form_title=form.title, response_id=response.id, created_at=response.created_at,
-        fields=clean_fields(form.fields), answers=response.answers or {}, qualified=response.qualified,
+        fields=question_fields(form.fields), answers=response.answers or {}, qualified=response.qualified,
         contact_utm=(contact.last_utm or contact.first_utm) if contact else None,
         page_url=(response.capi_ctx or {}).get("url") or "", transaction_id=response.transaction_id,
     )

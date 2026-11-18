@@ -24,9 +24,16 @@ export const DEFAULT_SETTINGS: LeadFormSettings = {
   meta_test_event_code: "",
   whatsapp_redirect: false, whatsapp_phone: "",
   whatsapp_message: "Olá! Acabei de preencher o formulário e quero falar com vocês.",
+  first_contact_enabled: false, first_contact_message: "", first_contact_delay: 30,
+  first_contact_audience: "all",
   track_journey: true,
   sheets_enabled: false, sheets_url: "", sheets_tab: "Respostas", sheets_secret: "",
+  use_line_pixel: false,
 };
+
+/** Igual a FIRST_CONTACT_MESSAGE do backend: vai quando o campo fica vazio. */
+export const FIRST_CONTACT_MESSAGE =
+  "Olá, {nome}! Recebemos o seu formulário. 😊\nSou da equipe e vou te atender por aqui. Já estou olhando as suas respostas.";
 
 export const FIELD_TYPES: { v: LeadFormFieldType; l: string; hint: string }[] = [
   { v: "text", l: "Texto curto", hint: "Nome, cidade, empresa…" },
@@ -40,7 +47,22 @@ export const FIELD_TYPES: { v: LeadFormFieldType; l: string; hint: string }[] = 
   { v: "multi", l: "Múltipla seleção", hint: "Marca quantas quiser" },
   { v: "select", l: "Lista suspensa", hint: "Bom para muitas opções" },
   { v: "rating", l: "Nota (1 a 5)", hint: "Estrelas de satisfação" },
+  { v: "info", l: "Conteúdo (sem resposta)", hint: "Tela que explica e prepara o lead" },
 ];
+
+/** Pergunta de verdade — as telas de conteúdo ("info") não geram resposta. */
+export const isQuestion = (f: LeadFormField) => f.type !== "info";
+
+/** Mídia de uma tela de conteúdo: vídeo do YouTube/Vimeo vira player; o resto é imagem. */
+export function mediaEmbed(url: string | undefined): { kind: "video" | "image"; src: string } | null {
+  const u = (url || "").trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  const yt = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{6,20})/i.exec(u);
+  if (yt) return { kind: "video", src: `https://www.youtube-nocookie.com/embed/${yt[1]}` };
+  const vm = /vimeo\.com\/(?:video\/)?(\d{6,12})/i.exec(u);
+  if (vm) return { kind: "video", src: `https://player.vimeo.com/video/${vm[1]}` };
+  return { kind: "image", src: u };
+}
 
 export const OPTION_TYPES: LeadFormFieldType[] = ["choice", "multi", "select"];
 
@@ -108,6 +130,7 @@ export function fieldPlaceholder(f: LeadFormField): string {
 
 /** Erro de validação da resposta, ou "" quando está tudo certo. */
 export function validateAnswer(f: LeadFormField, value: string | string[]): string {
+  if (!isQuestion(f)) return "";
   const filled = Array.isArray(value) ? value.length > 0 : !!value.trim();
   if (f.required && !filled) {
     return f.type === "choice" || f.type === "multi" || f.type === "select"

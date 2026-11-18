@@ -1164,6 +1164,54 @@ export const superApi = {
     }),
 }
 
+// --- painel de demandas do gestor ---
+
+export type DemandStatus = 'aberta' | 'andamento' | 'concluida'
+export type DemandPriority = 'baixa' | 'media' | 'alta' | 'urgente'
+
+export type Demand = {
+  id: number
+  title: string
+  description: string | null
+  /** cliente (linha) a que a demanda se refere; null = interna */
+  wa_number_id: number | null
+  number_label: string | null
+  assignee_id: number | null
+  assignee_name: string | null
+  created_by: number | null
+  creator_name: string | null
+  priority: DemandPriority
+  status: DemandStatus
+  /** AAAA-MM-DD, sem hora */
+  due_date: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+  /** admin ou quem criou: edita tudo e apaga. Sem isso, só muda o status. */
+  can_edit: boolean
+}
+
+export type DemandInput = {
+  title: string
+  description: string | null
+  wa_number_id: number | null
+  assignee_id: number | null
+  priority: DemandPriority
+  status: DemandStatus
+  due_date: string | null
+}
+
+export const demandsApi = {
+  list: () => request<Demand[]>('/api/demands'),
+  /** quem pode ser responsável: todos pro admin, só o próprio usuário pro resto */
+  options: () => request<{ users: { id: number; name: string }[] }>('/api/demands/options'),
+  create: (payload: DemandInput) =>
+    request<Demand>('/api/demands', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id: number, patch: Partial<DemandInput>) =>
+    request<Demand>(`/api/demands/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  remove: (id: number) => request<{ ok: boolean }>(`/api/demands/${id}`, { method: 'DELETE' }),
+}
+
 // --- conexão com o Facebook (OAuth) ---
 
 export type MetaStatus = {

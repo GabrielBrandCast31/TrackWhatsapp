@@ -28,6 +28,7 @@ export const ArrowDown = (p: P) => <I {...p}><path d="M12 5v14M19 12l-7 7-7-7" /
 export const ArrowUp = (p: P) => <I {...p}><path d="M12 19V5M5 12l7-7 7 7" /></I>
 export const ArrowLeft = (p: P) => <I {...p}><path d="M19 12H5M12 19l-7-7 7-7" /></I>
 export const ArrowRight = (p: P) => <I {...p}><path d="M5 12h14M12 5l7 7-7 7" /></I>
+export const MessageCircle = (p: P) => <I {...p}><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></I>
 export const Bell = (p: P) => <I {...p}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></I>
 export const Check = (p: P) => <I {...p}><path d="M20 6 9 17l-5-5" /></I>
 export const ChevronDown = (p: P) => <I {...p}><path d="m6 9 6 6 6-6" /></I>
