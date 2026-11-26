@@ -209,7 +209,14 @@ def _apply_meta_link(number: WaNumber, payload: InstancePatch) -> None:
             number.quality_error = None
         number.meta_phone_number_id = pnid or None
     if payload.meta_business_account_id is not None:
-        number.business_account_id = payload.meta_business_account_id.strip() or None
+        waba = payload.meta_business_account_id.strip()
+        # vai no caminho da Graph API (`/{waba}/message_templates`): so o ID numerico
+        if waba and not waba.isdigit():
+            raise HTTPException(
+                status_code=400,
+                detail="WhatsApp Business Account ID é o ID numérico da conta na Meta (WhatsApp Manager).",
+            )
+        number.business_account_id = waba or None
     if payload.meta_access_token:
         number.access_token = payload.meta_access_token.strip()
 

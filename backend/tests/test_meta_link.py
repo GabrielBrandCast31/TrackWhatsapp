@@ -112,6 +112,8 @@ async def main():
         print("vínculo")
         r = await http.patch(f"/api/evolution/instances/{L}", headers=h, json={"meta_phone_number_id": "+55 11 9"})
         check("telefone no lugar do ID é recusado", r.status_code == 400, r.text)
+        r = await http.patch(f"/api/evolution/instances/{L}", headers=h, json={"meta_business_account_id": "../me"})
+        check("WABA não numérico é recusado", r.status_code == 400, r.text)
         r = await http.patch(f"/api/evolution/instances/{L}", headers=h, json={"meta_phone_number_id": "123456789"})
         check("sem token próprio não vincula", not r.json()["meta_linked"], r.json())
         r = await http.post(f"/api/evolution/instances/{L}/quality", headers=h)
