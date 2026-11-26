@@ -436,6 +436,7 @@ export type WaTemplate = {
 export type CampaignLeadsFilters = {
   number_id?: number
   channel?: 'meta_ads' | 'google_ads' | 'utm' | ''
+  all_contacts?: boolean
   campaign?: string
   date_from?: string
   date_to?: string
@@ -1343,7 +1344,7 @@ export const api = {
   downloadCampaignLeads: (filters: CampaignLeadsFilters = {}) =>
     download(
       `/api/contacts/campaign-leads.csv${qs(filters as Record<string, unknown>)}`,
-      `leads-campanha-${new Date().toISOString().slice(0, 10)}.csv`,
+      `${filters.all_contacts ? 'contatos' : 'leads-campanha'}-${new Date().toISOString().slice(0, 10)}.csv`,
     ),
   simulate: (payload: Record<string, unknown>, numberId?: number) =>
     request<unknown>(`/api/contacts/simulate${qs({ number_id: numberId })}`, {

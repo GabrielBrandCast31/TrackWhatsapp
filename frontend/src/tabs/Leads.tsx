@@ -113,15 +113,27 @@ function CampaignExport({ numberId }: { numberId?: number }) {
   return (
     <div className="mb-4 space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">
       <p className="text-xs leading-relaxed text-ink-500">
-        Exporta o telefone de quem chamou no WhatsApp vindo de campanha (Meta Ads, Google Ads ou link com UTM),
-        com nome, campanha, anúncio e data. Um telefone por linha; abre direto no Excel.
+        Exporta o telefone de quem chamou no WhatsApp — só quem veio de campanha (Meta Ads, Google Ads ou link com
+        UTM) ou todos os contatos da linha — com nome, origem, campanha e data. Um telefone por linha; abre direto no
+        Excel. Sem datas, sai o histórico inteiro.
       </p>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Origem">
           <Select
-            value={filters.channel ?? ''}
-            onChange={(e) => setFilters({ ...filters, channel: e.target.value as CampaignLeadsFilters['channel'] })}
+            value={filters.all_contacts ? 'all' : (filters.channel ?? '')}
+            onChange={(e) =>
+              setFilters(
+                e.target.value === 'all'
+                  ? { ...filters, all_contacts: true, channel: '', campaign: '' }
+                  : {
+                      ...filters,
+                      all_contacts: false,
+                      channel: e.target.value as CampaignLeadsFilters['channel'],
+                    },
+              )
+            }
           >
+            <option value="all">Todos os contatos da linha</option>
             <option value="">Todas as campanhas</option>
             <option value="meta_ads">Meta Ads (Facebook/Instagram)</option>
             <option value="google_ads">Google Ads</option>
@@ -130,7 +142,8 @@ function CampaignExport({ numberId }: { numberId?: number }) {
         </Field>
         <Field label="Campanha contém">
           <Input
-            placeholder="ex.: black friday"
+            disabled={filters.all_contacts}
+            placeholder={filters.all_contacts ? 'qualquer origem' : 'ex.: black friday'}
             value={filters.campaign ?? ''}
             onChange={(e) => setFilters({ ...filters, campaign: e.target.value })}
           />
@@ -150,9 +163,16 @@ function CampaignExport({ numberId }: { numberId?: number }) {
           />
         </Field>
       </div>
-      <Button variant="primary" size="sm" disabled={busy} onClick={() => void download()}>
-        {busy ? 'Gerando…' : 'Baixar CSV'}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" size="sm" disabled={busy} onClick={() => void download()}>
+          {busy ? 'Gerando…' : 'Baixar CSV'}
+        </Button>
+        {(filters.date_from || filters.date_to) && (
+          <Button size="sm" onClick={() => setFilters({ ...filters, date_from: '', date_to: '' })}>
+            Sem intervalo (todo o período)
+          </Button>
+        )}
+      </div>
       {error && <Banner tone="bad">{error}</Banner>}
     </div>
   )

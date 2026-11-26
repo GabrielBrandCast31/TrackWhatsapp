@@ -107,6 +107,14 @@ async def main():
         check("por data (inclusiva)", [x["telefone"] for x in parse(r.text)] == ["+5511900000002"])
         r = await http.get(url, headers=h, params={"unique": "false", "channel": "meta_ads"})
         check("sem dedupe", len(parse(r.text)) == 2)
+        print("todos os contatos da linha")
+        r = await http.get(url, headers=h, params={"number_id": L, "all_contacts": "true"})
+        rows = parse(r.text)
+        check("arquivo de contatos", "contatos-" in r.headers.get("content-disposition", ""))
+        check("inclui orgânico, sem simulado nem LID",
+              [x["telefone"] for x in rows] == ["+5511900000001", "+5511900000004", "+5511900000002", "+5511900000003"],
+              [x["telefone"] for x in rows])
+        check("orgânico etiquetado", rows[1]["canal"] == "Orgânico", rows[1])
         r = await http.get(url, headers=h, params={"channel": "organic"})
         check("canal inválido -> 422", r.status_code == 422, r.status_code)
         r = await http.get(url)

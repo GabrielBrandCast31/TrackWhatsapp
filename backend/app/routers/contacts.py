@@ -104,14 +104,18 @@ async def export_campaign_leads(
     date_from: date | None = Query(default=None, description="chegou a partir de (AAAA-MM-DD)"),
     date_to: date | None = Query(default=None, description="chegou até (AAAA-MM-DD, inclusive)"),
     unique: bool = Query(default=True, description="um telefone por linha do arquivo"),
+    all_contacts: bool = Query(default=False, description="todos os contatos da linha, de qualquer origem"),
     session: AsyncSession = Depends(get_session),
 ):
     """Leads que chamaram no WhatsApp vindos de campanha (Meta Ads, Google Ads ou link com UTM).
 
+    Com `all_contacts`, sai a base inteira da linha (organico e agenda inclusos);
+    sem `date_from`/`date_to`, o historico todo.
+
     Separado por `;` e com BOM, para abrir direto no Excel em português.
     """
     channels = set(channel or CAMPAIGN_CHANNELS) & set(CAMPAIGN_CHANNELS)
-    if not channels:
+    if not channels and not all_contacts:
         raise HTTPException(status_code=422, detail=f"canal inválido; use {', '.join(CAMPAIGN_CHANNELS)}")
 
     stmt = select(Contact).where(Contact.origin != "simulado").order_by(Contact.created_at)
@@ -135,7 +139,7 @@ async def export_campaign_leads(
     seen: set[str] = set()
     for c in rows:
         src = campaigns_service.lead_source(c, known.get(c.source_id or ""))
-        if src["channel"] not in channels:
+        if not all_contacts and src["channel"] not in channels:
             continue
         if needle and needle not in (src["campaign_name"] or "").lower():
             continue
@@ -165,7 +169,8 @@ async def export_campaign_leads(
             c.created_at.strftime("%d/%m/%Y %H:%M") if c.created_at else "",
         )])
 
-    filename = f"leads-campanha-{datetime.now().strftime('%Y%m%d-%H%M')}.csv"
+    prefix = "contatos" if all_contacts else "leads-campanha"
+    filename = f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M')}.csv"
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
