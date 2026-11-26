@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 
 import { MessagePayloadToggle } from '../MessagePayload'
 import { useNumber } from '../numberContext'
-import { api, evolutionApi, type Contact, type ContactDetail, type Conversion } from '../api'
-import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Toggle, when } from '../ui'
+import { api, evolutionApi, type CampaignLeadsFilters, type Contact, type ContactDetail, type Conversion } from '../api'
+import { Badge, Banner, Button, Card, Empty, Field, Input, Json, Select, Toggle, when } from '../ui'
 
 function AttributionTags({ c }: { c: Contact }) {
   return (
@@ -92,12 +92,79 @@ function FireForm({ contact, onFired }: { contact: ContactDetail; onFired: (c: C
   )
 }
 
+/** Baixa o CSV com os telefones dos leads que chamaram vindos de campanha. */
+function CampaignExport({ numberId }: { numberId?: number }) {
+  const [filters, setFilters] = useState<CampaignLeadsFilters>({ channel: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const download = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.downloadCampaignLeads({ ...filters, number_id: numberId })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao gerar o CSV.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-4 space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">
+      <p className="text-xs leading-relaxed text-ink-500">
+        Exporta o telefone de quem chamou no WhatsApp vindo de campanha (Meta Ads, Google Ads ou link com UTM),
+        com nome, campanha, anúncio e data. Um telefone por linha; abre direto no Excel.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Origem">
+          <Select
+            value={filters.channel ?? ''}
+            onChange={(e) => setFilters({ ...filters, channel: e.target.value as CampaignLeadsFilters['channel'] })}
+          >
+            <option value="">Todas as campanhas</option>
+            <option value="meta_ads">Meta Ads (Facebook/Instagram)</option>
+            <option value="google_ads">Google Ads</option>
+            <option value="utm">Link com UTM</option>
+          </Select>
+        </Field>
+        <Field label="Campanha contém">
+          <Input
+            placeholder="ex.: black friday"
+            value={filters.campaign ?? ''}
+            onChange={(e) => setFilters({ ...filters, campaign: e.target.value })}
+          />
+        </Field>
+        <Field label="Chegou de">
+          <Input
+            type="date"
+            value={filters.date_from ?? ''}
+            onChange={(e) => setFilters({ ...filters, date_from: e.target.value })}
+          />
+        </Field>
+        <Field label="Até">
+          <Input
+            type="date"
+            value={filters.date_to ?? ''}
+            onChange={(e) => setFilters({ ...filters, date_to: e.target.value })}
+          />
+        </Field>
+      </div>
+      <Button variant="primary" size="sm" disabled={busy} onClick={() => void download()}>
+        {busy ? 'Gerando…' : 'Baixar CSV'}
+      </Button>
+      {error && <Banner tone="bad">{error}</Banner>}
+    </div>
+  )
+}
+
 export default function Leads({ onChanged }: { onChanged: () => void }) {
   const { numberId, current } = useNumber()
   const [contacts, setContacts] = useState<Contact[]>([])
   const [onlyAttributed, setOnlyAttributed] = useState(false)
   const [selected, setSelected] = useState<ContactDetail | null>(null)
   const [simOpen, setSimOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [sim, setSim] = useState({
     wa_id: '5511988887777',
     name: 'Lead de Teste',
@@ -124,6 +191,9 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
         }. A atribuição chega junto com a primeira mensagem depois do clique.`}
         actions={
           <>
+            <Button size="sm" onClick={() => setExportOpen(!exportOpen)}>
+              Exportar leads de campanha
+            </Button>
             <Button size="sm" onClick={() => setSimOpen(!simOpen)}>
               Simular lead
             </Button>
@@ -136,6 +206,8 @@ export default function Leads({ onChanged }: { onChanged: () => void }) {
         <div className="mb-4">
           <Toggle checked={onlyAttributed} onChange={setOnlyAttributed} label="Só com atribuição" />
         </div>
+
+        {exportOpen && <CampaignExport numberId={numberId} />}
 
         {simOpen && (
           <div className="mb-4 space-y-3 rounded-lg border border-ink-800 bg-ink-850 p-4">

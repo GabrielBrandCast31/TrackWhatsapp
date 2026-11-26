@@ -1,6 +1,11 @@
 """Leads capturados do WhatsApp, com a atribuicao de origem."""
 
+import csv
+import io
+from datetime import date, datetime, time, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,9 +13,10 @@ from sqlalchemy.orm import selectinload
 
 from app import numbers as numbers_service
 from app import access
+from app import campaigns as campaigns_service
 from app.db import get_session
 from app.ingest import build_simulated_payload, ingest_payload
-from app.models import Contact, Conversion, Message, WebhookLog
+from app.models import Contact, Conversion, Message, WaNumber, WebhookLog
 
 router = APIRouter(prefix="/api", tags=["contacts"])
 
@@ -64,6 +70,107 @@ async def list_contacts(
         )
     rows = (await session.execute(stmt)).scalars().all()
     return [serialize_contact(c, counts.get(c.id, 0)) for c in rows]
+
+
+# canais que contam como "veio de campanha" (`campaigns.lead_source`)
+CAMPAIGN_CHANNELS = ("meta_ads", "google_ads", "utm")
+
+CAMPAIGN_CSV_COLUMNS = [
+    "telefone", "nome", "canal", "plataforma", "campanha", "conjunto", "anuncio",
+    "titulo_anuncio", "utm_source", "utm_medium", "utm_campaign", "utm_content",
+    "primeira_mensagem", "linha", "etapa", "chegou_em",
+]
+
+
+def _csv_safe(value) -> str:
+    """Texto livre (nome, mensagem do lead) nao pode virar formula no Excel/Sheets."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _lead_phone(c: Contact) -> str:
+    """Telefone em E.164; sem ele, o wa_id quando e telefone (LID nao e numero)."""
+    if c.phone_e164:
+        return c.phone_e164
+    wa = (c.wa_id or "").strip()
+    return f"+{wa}" if wa.isdigit() else ""
+
+
+@router.get("/contacts/campaign-leads.csv")
+async def export_campaign_leads(
+    number_id: int | None = Query(default=None, description="filtra pela linha de WhatsApp"),
+    channel: list[str] | None = Query(default=None, description="meta_ads | google_ads | utm (padrão: todos)"),
+    campaign: str | None = Query(default=None, description="trecho do nome da campanha"),
+    date_from: date | None = Query(default=None, description="chegou a partir de (AAAA-MM-DD)"),
+    date_to: date | None = Query(default=None, description="chegou até (AAAA-MM-DD, inclusive)"),
+    unique: bool = Query(default=True, description="um telefone por linha do arquivo"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Leads que chamaram no WhatsApp vindos de campanha (Meta Ads, Google Ads ou link com UTM).
+
+    Separado por `;` e com BOM, para abrir direto no Excel em português.
+    """
+    channels = set(channel or CAMPAIGN_CHANNELS) & set(CAMPAIGN_CHANNELS)
+    if not channels:
+        raise HTTPException(status_code=422, detail=f"canal inválido; use {', '.join(CAMPAIGN_CHANNELS)}")
+
+    stmt = select(Contact).where(Contact.origin != "simulado").order_by(Contact.created_at)
+    stmt = access.scope(stmt, Contact.wa_number_id, number_id)
+    if date_from:
+        stmt = stmt.where(Contact.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        stmt = stmt.where(
+            Contact.created_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        )
+    rows = (await session.execute(stmt)).scalars().all()
+
+    known = await campaigns_service.campaigns_for(session, (c.source_id for c in rows))
+    labels = dict((await session.execute(select(WaNumber.id, WaNumber.label))).all())
+    needle = (campaign or "").strip().lower()
+
+    buf = io.StringIO()
+    buf.write("﻿")
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(CAMPAIGN_CSV_COLUMNS)
+    seen: set[str] = set()
+    for c in rows:
+        src = campaigns_service.lead_source(c, known.get(c.source_id or ""))
+        if src["channel"] not in channels:
+            continue
+        if needle and needle not in (src["campaign_name"] or "").lower():
+            continue
+        phone = _lead_phone(c)
+        if not phone:
+            continue
+        if unique:
+            if phone in seen:
+                continue
+            seen.add(phone)
+        utm = src["utm"] or {}
+        writer.writerow([phone] + [_csv_safe(v) for v in (
+            c.name,
+            src["channel_label"],
+            src["platform_label"],
+            src["campaign_name"],
+            src["adset_name"],
+            src["ad_name"] or src["ad_id"],
+            src["ad_headline"],
+            utm.get("utm_source"),
+            utm.get("utm_medium"),
+            utm.get("utm_campaign"),
+            utm.get("utm_content"),
+            (c.first_message or "").replace("\r", " ").replace("\n", " "),
+            labels.get(c.wa_number_id),
+            c.stage,
+            c.created_at.strftime("%d/%m/%Y %H:%M") if c.created_at else "",
+        )])
+
+    filename = f"leads-campanha-{datetime.now().strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/contacts/{contact_id}")

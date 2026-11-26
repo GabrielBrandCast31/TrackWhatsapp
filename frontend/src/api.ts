@@ -433,6 +433,14 @@ export type WaTemplate = {
   approved: boolean
 }
 
+export type CampaignLeadsFilters = {
+  number_id?: number
+  channel?: 'meta_ads' | 'google_ads' | 'utm' | ''
+  campaign?: string
+  date_from?: string
+  date_to?: string
+}
+
 export type ProspectFilters = {
   stage?: string
   search_id?: number
@@ -1301,6 +1309,12 @@ export const api = {
   contacts: (onlyAttributed = false, numberId?: number) =>
     request<Contact[]>(`/api/contacts${qs({ only_attributed: onlyAttributed, number_id: numberId })}`),
   contact: (id: number) => request<ContactDetail>(`/api/contacts/${id}`),
+  /** Leads que chamaram vindos de campanha (Meta Ads, Google Ads, UTM), em CSV. */
+  downloadCampaignLeads: (filters: CampaignLeadsFilters = {}) =>
+    download(
+      `/api/contacts/campaign-leads.csv${qs(filters as Record<string, unknown>)}`,
+      `leads-campanha-${new Date().toISOString().slice(0, 10)}.csv`,
+    ),
   simulate: (payload: Record<string, unknown>, numberId?: number) =>
     request<unknown>(`/api/contacts/simulate${qs({ number_id: numberId })}`, {
       method: 'POST',
