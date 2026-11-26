@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import access, journey
+from app import access, journey, meta_link
 from app import numbers as numbers_service
 from app import phones, settings_store
 from app.db import get_session
@@ -108,6 +108,12 @@ def serialize(number: WaNumber, counts: dict | None = None, cfg: dict | None = N
         "objective_events": overrides.get("objective_events") or {},
         "enabled_destinations": enabled_destinations(cfg) if cfg else [],
         "counts": counts or {},
+        # vinculo com a Cloud API: qualidade do numero e disparo por template
+        "meta_phone_number_id": number.meta_phone_number_id or "",
+        "meta_business_account_id": number.business_account_id or "",
+        "meta_access_token__set": bool(number.access_token),
+        "meta_access_token__hint": f"...{number.access_token[-4:]}" if len(number.access_token or "") >= 4 else "",
+        **meta_link.quality_of(number),
     }
 
 
@@ -149,6 +155,11 @@ class InstancePatch(BaseModel):
     active: bool | None = None
     is_default: bool | None = None
     rotate_webhook_token: bool = False
+    # vinculo com o mesmo numero na Cloud API (qualidade + disparo por template)
+    meta_phone_number_id: str | None = None
+    meta_business_account_id: str | None = None
+    meta_access_token: str | None = None  # vazio = mantem o atual
+    clear_meta_link: bool = False
 
 
 def _apply_meta(number: WaNumber, payload: InstanceIn | InstancePatch) -> None:
@@ -170,6 +181,37 @@ def _apply_meta(number: WaNumber, payload: InstanceIn | InstancePatch) -> None:
     if overrides.get("meta_dataset_id") and overrides.get("meta_capi_token"):
         overrides["meta_capi_enabled"] = True
     number.overrides = overrides
+
+
+def _apply_meta_link(number: WaNumber, payload: InstancePatch) -> None:
+    """Phone Number ID / WABA / token da Meta pra essa linha Evolution."""
+    if payload.clear_meta_link:
+        number.meta_phone_number_id = None
+        number.business_account_id = None
+        number.access_token = None
+        number.quality_rating = None
+        number.messaging_limit_tier = None
+        number.meta_status = None
+        number.quality_checked_at = None
+        number.quality_error = None
+        return
+    if payload.meta_phone_number_id is not None:
+        pnid = payload.meta_phone_number_id.strip()
+        if pnid and not pnid.isdigit():
+            raise HTTPException(
+                status_code=400,
+                detail="Phone Number ID é o ID numérico da Meta (WhatsApp Manager → Números), não o telefone.",
+            )
+        if pnid != (number.meta_phone_number_id or ""):
+            # outro numero: a qualidade guardada era do anterior
+            number.quality_rating = number.messaging_limit_tier = number.meta_status = None
+            number.quality_checked_at = None
+            number.quality_error = None
+        number.meta_phone_number_id = pnid or None
+    if payload.meta_business_account_id is not None:
+        number.business_account_id = payload.meta_business_account_id.strip() or None
+    if payload.meta_access_token:
+        number.access_token = payload.meta_access_token.strip()
 
 
 async def _counts(session: AsyncSession, number_id: int) -> dict:
@@ -357,6 +399,7 @@ async def patch_instance(
     if payload.rotate_webhook_token:
         number.webhook_token = secrets.token_urlsafe(18)
     _apply_meta(number, payload)
+    _apply_meta_link(number, payload)
 
     if payload.is_default:
         await numbers_service.set_default(session, number)
@@ -454,6 +497,23 @@ async def instance_status(number_id: int, session: AsyncSession = Depends(get_se
     out["webhook_url"] = webhook_url_for(number)
     out["webhook_public_url"] = public_webhook_url_for(number)
     return out
+
+
+@router.post("/instances/{number_id}/quality")
+async def instance_quality(number_id: int, session: AsyncSession = Depends(get_session)):
+    """Qualidade do numero na Meta (verde/amarelo/vermelho), limite de envio e status.
+
+    So existe se o numero tambem estiver registrado na Cloud API — a Evolution
+    sozinha nao tem esse dado.
+    """
+    number = await _require(session, number_id)
+    if not meta_link.has_meta(number):
+        raise HTTPException(
+            status_code=400,
+            detail="Vincule o Phone Number ID e o Access Token da Meta nesta linha para consultar a qualidade.",
+        )
+    cfg = meta_link.cloud_cfg(await settings_store.load(session), number)
+    return await meta_link.refresh_quality(session, number, cfg)
 
 
 @router.post("/instances/{number_id}/connect")

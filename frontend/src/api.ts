@@ -828,11 +828,15 @@ export type BroadcastStats = {
   replied: number
 }
 
+export type SendVia = 'evolution' | 'cloud'
+
 export type Broadcast = {
   id: number
   wa_number_id: number | null
   name: string
   kind: 'text' | 'template'
+  /** por onde saiu quando difere do canal da linha */
+  via?: SendVia | null
   text: string | null
   template_name: string | null
   template_language: string | null
@@ -877,14 +881,15 @@ export type BroadcastMessage = {
   template_name?: string
   template_language?: string
   template_params?: string[]
+  via?: SendVia
 }
 
 export const broadcastApi = {
   list: (numberId?: number) => request<Broadcast[]>(`/api/broadcasts${qs({ number_id: numberId })}`),
   templates: (numberId: number) => request<WaTemplate[]>(`/api/broadcasts/templates${qs({ number_id: numberId })}`),
   get: (id: number, status?: string) => request<BroadcastDetail>(`/api/broadcasts/${id}${qs({ status })}`),
-  audience: (numberId: number, filters: AudienceFilters) =>
-    request<AudiencePreview>(`/api/broadcasts/audience${qs({ number_id: numberId })}`, {
+  audience: (numberId: number, filters: AudienceFilters, via?: SendVia) =>
+    request<AudiencePreview>(`/api/broadcasts/audience${qs({ number_id: numberId, via })}`, {
       method: 'POST',
       body: JSON.stringify(filters),
     }),
@@ -944,6 +949,30 @@ export type EvoInstance = {
   objective_events?: Record<string, string>
   enabled_destinations: string[]
   counts: { contacts?: number; conversions?: number; rules?: number }
+  /** vínculo com o mesmo número na Cloud API: qualidade + disparo por template */
+  meta_linked?: boolean
+  meta_phone_number_id?: string
+  meta_business_account_id?: string
+  meta_access_token__set?: boolean
+  meta_access_token__hint?: string
+  quality_rating?: string | null
+  messaging_limit_tier?: string | null
+  meta_status?: string | null
+  quality_checked_at?: string | null
+  quality_error?: string | null
+}
+
+/** Resultado de "Checar qualidade" (Graph API da Meta). */
+export type MetaQuality = {
+  ok: boolean
+  error: string | null
+  meta_linked: boolean
+  quality_rating: string | null
+  messaging_limit_tier: string | null
+  meta_status: string | null
+  quality_checked_at: string | null
+  quality_error: string | null
+  raw?: Record<string, unknown>
 }
 
 export type EvoStatus = {
@@ -1006,6 +1035,7 @@ export const evolutionApi = {
     ),
   status: (id: number) => request<EvoStatus>(`/api/evolution/instances/${id}/status`),
   connect: (id: number) => request<EvoQr>(`/api/evolution/instances/${id}/connect`, { method: 'POST' }),
+  quality: (id: number) => request<MetaQuality>(`/api/evolution/instances/${id}/quality`, { method: 'POST' }),
   setWebhook: (id: number) =>
     request<{ webhook_url: string; events: string[]; response: unknown }>(
       `/api/evolution/instances/${id}/webhook`,

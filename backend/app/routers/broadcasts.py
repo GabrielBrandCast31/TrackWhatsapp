@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import access, phones, settings_store
+from app import access, meta_link, phones, settings_store
 from app import broadcasts as service
 from app import numbers as numbers_service
 from app.db import get_session
@@ -39,6 +39,8 @@ class MessageIn(BaseModel):
     template_name: str | None = None
     template_language: str | None = None
     template_params: list[str] = Field(default_factory=list)
+    # "evolution" | "cloud"; vazio = canal da linha
+    via: str | None = None
 
 
 class TestIn(MessageIn):
@@ -60,12 +62,17 @@ class BroadcastIn(MessageIn):
     start: bool = False
 
 
-async def _line(session: AsyncSession, number_id: int) -> tuple[WaNumber, dict]:
+async def _line(session: AsyncSession, number_id: int, via: str | None = None) -> tuple[WaNumber, dict, str]:
+    """(linha, config de envio, canal). O canal sai do `via` pedido ou da linha."""
     access.ensure_number(number_id)
     number = await session.get(WaNumber, number_id)
     if number is None:
         raise HTTPException(status_code=404, detail="Linha não encontrada.")
-    return number, numbers_service.effective_cfg(await settings_store.load(session), number)
+    try:
+        channel = service.channel_for(number, via)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return number, service.send_cfg(await settings_store.load(session), number, channel), channel
 
 
 def _message_text(payload: MessageIn) -> str | None:
@@ -92,6 +99,7 @@ def serialize(b: Broadcast, stats: dict | None = None) -> dict:
         "wa_number_id": b.wa_number_id,
         "name": b.name,
         "kind": b.kind,
+        "via": b.via,
         "text": b.text,
         "template_name": b.template_name,
         "template_language": b.template_language,
@@ -120,11 +128,12 @@ def _serialize_contact(c: Contact) -> dict:
 async def preview_audience(
     payload: AudienceIn,
     number_id: int = Query(),
+    via: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ):
     """Quantos entram com esse filtro, quem fica de fora e por quê, e uma amostra."""
-    number, cfg = await _line(session, number_id)
-    rows, dropped = await service.audience(session, number, cfg, payload.model_dump())
+    number, cfg, channel = await _line(session, number_id, via)
+    rows, dropped = await service.audience(session, number, cfg, payload.model_dump(), channel)
     return {
         "count": len(rows),
         "dropped": dropped,
@@ -135,10 +144,14 @@ async def preview_audience(
 
 @router.get("/templates")
 async def list_templates(number_id: int = Query(), session: AsyncSession = Depends(get_session)):
-    """Templates do WABA da linha (só Cloud API). A Evolution manda texto livre."""
-    number, cfg = await _line(session, number_id)
-    if (number.channel or "evolution") == "evolution":
+    """Templates do WABA da linha. Evolution sem vínculo Meta manda só texto livre."""
+    access.ensure_number(number_id)
+    number = await session.get(WaNumber, number_id)
+    if number is None:
+        raise HTTPException(status_code=404, detail="Linha não encontrada.")
+    if not meta_link.has_meta(number):
         return []
+    cfg = meta_link.cloud_cfg(await settings_store.load(session), number)
     try:
         raw = await whatsapp_cloud.message_templates(cfg)
     except Exception as exc:  # noqa: BLE001 — a UI mostra o motivo cru
@@ -171,8 +184,7 @@ async def send_test(payload: TestIn, session: AsyncSession = Depends(get_session
 
     Não grava nada na campanha: é o ensaio antes do disparo de verdade.
     """
-    number, cfg = await _line(session, payload.number_id)
-    channel = number.channel or "evolution"
+    number, cfg, channel = await _line(session, payload.number_id, payload.via)
     _check_message(payload, channel)
     e164 = phones.to_e164(payload.phone)
     if not e164:
@@ -211,11 +223,10 @@ async def list_broadcasts(
 @router.post("", status_code=201)
 async def create_broadcast(payload: BroadcastIn, session: AsyncSession = Depends(get_session)):
     """Cria a campanha e congela a audiência. Com `start`, já entra na fila."""
-    number, cfg = await _line(session, payload.number_id)
-    channel = number.channel or "evolution"
+    number, cfg, channel = await _line(session, payload.number_id, payload.via)
     _check_message(payload, channel)
 
-    contacts, _ = await service.audience(session, number, cfg, payload.filters.model_dump())
+    contacts, _ = await service.audience(session, number, cfg, payload.filters.model_dump(), channel)
     if not contacts:
         raise HTTPException(status_code=400, detail="Nenhum contato entra nesse filtro.")
 
@@ -224,6 +235,8 @@ async def create_broadcast(payload: BroadcastIn, session: AsyncSession = Depends
         wa_number_id=number.id,
         name=payload.name.strip(),
         kind="template" if channel != "evolution" and payload.kind == "template" else "text",
+        # guarda so quando difere do canal da linha: campanha antiga segue o da linha
+        via=channel if channel != (number.channel or "evolution") else None,
         text=_message_text(payload),
         template_name=payload.template_name,
         template_language=payload.template_language or "pt_BR",

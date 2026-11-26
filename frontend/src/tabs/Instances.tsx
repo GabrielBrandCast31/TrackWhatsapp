@@ -8,6 +8,7 @@ import {
   type EvoInstance,
   type EvoQr,
   type EvoStatus,
+  type MetaQuality,
 } from '../api'
 import { useNumber } from '../numberContext'
 import CloudLines from './CloudLines'
@@ -31,6 +32,214 @@ function StateBadge({ state }: { state: string | null }) {
   const open = ['open', 'connected'].includes(state)
   const waiting = ['connecting', 'qrcode', 'close'].includes(state)
   return <Badge tone={open ? 'good' : waiting ? 'warn' : 'bad'}>{open ? 'conectada' : state}</Badge>
+}
+
+// --- qualidade do número na Meta ---------------------------------------------
+
+const QUALITY: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 'neutral'; hint: string }> = {
+  GREEN: { label: 'alta', tone: 'good', hint: 'Sem sinais de problema. Pode seguir no ritmo atual.' },
+  YELLOW: {
+    label: 'média',
+    tone: 'warn',
+    hint: 'Há bloqueios/denúncias recentes. Reduza o volume e revise a mensagem antes do próximo disparo.',
+  },
+  RED: {
+    label: 'baixa',
+    tone: 'bad',
+    hint: 'Muitos bloqueios/denúncias. Pare os disparos: a Meta pode rebaixar o limite ou restringir o número.',
+  },
+  UNKNOWN: { label: 'sem dados', tone: 'neutral', hint: 'A Meta ainda não tem volume suficiente para avaliar.' },
+}
+
+const TIER_LABEL: Record<string, string> = {
+  TIER_50: '50 contatos/24h',
+  TIER_250: '250 contatos/24h',
+  TIER_1K: '1 mil contatos/24h',
+  TIER_2K: '2 mil contatos/24h',
+  TIER_10K: '10 mil contatos/24h',
+  TIER_100K: '100 mil contatos/24h',
+  TIER_UNLIMITED: 'ilimitado',
+}
+
+const STATUS_LABEL: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 'neutral' }> = {
+  CONNECTED: { label: 'conectado', tone: 'good' },
+  FLAGGED: { label: 'sinalizado', tone: 'warn' },
+  RESTRICTED: { label: 'restrito', tone: 'bad' },
+  RATE_LIMITED: { label: 'limitado', tone: 'warn' },
+  BANNED: { label: 'banido', tone: 'bad' },
+  DISCONNECTED: { label: 'desconectado', tone: 'bad' },
+  PENDING: { label: 'pendente', tone: 'warn' },
+  MIGRATED: { label: 'migrado', tone: 'neutral' },
+}
+
+export function QualityBadge({ rating }: { rating?: string | null }) {
+  if (!rating) return null
+  const q = QUALITY[rating.toUpperCase()] ?? { label: rating.toLowerCase(), tone: 'neutral' as const }
+  return <Badge tone={q.tone}>qualidade {q.label}</Badge>
+}
+
+/** Vínculo da linha Evolution com o mesmo número na Cloud API + o selo de qualidade. */
+function MetaQualityPanel({ instance, onChanged }: { instance: EvoInstance; onChanged: () => Promise<void> }) {
+  const [draft, setDraft] = useState({
+    pnid: instance.meta_phone_number_id ?? '',
+    waba: instance.meta_business_account_id ?? '',
+    token: '',
+  })
+  const [busy, setBusy] = useState<string | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
+  const [raw, setRaw] = useState<MetaQuality | null>(null)
+  const linked = !!instance.meta_linked
+  const rating = (instance.quality_rating ?? '').toUpperCase()
+  const q = QUALITY[rating]
+  const status = STATUS_LABEL[(instance.meta_status ?? '').toUpperCase()]
+
+  const act = async (name: string, fn: () => Promise<void>) => {
+    setBusy(name)
+    setMsg(null)
+    try {
+      await fn()
+    } catch (e) {
+      setMsg({ tone: 'bad', text: (e as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const check = () =>
+    act('check', async () => {
+      const r = await evolutionApi.quality(instance.id)
+      setRaw(r)
+      await onChanged()
+      setMsg(r.ok ? { tone: 'good', text: 'Qualidade atualizada com a Meta.' } : { tone: 'bad', text: r.error ?? 'Falhou.' })
+    })
+
+  const save = () =>
+    act('save', async () => {
+      await evolutionApi.patch(instance.id, {
+        meta_phone_number_id: draft.pnid.trim(),
+        meta_business_account_id: draft.waba.trim(),
+        ...(draft.token.trim() ? { meta_access_token: draft.token.trim() } : {}),
+      })
+      setDraft({ ...draft, token: '' })
+      await onChanged()
+      if (draft.pnid.trim()) {
+        const r = await evolutionApi.quality(instance.id)
+        setRaw(r)
+        await onChanged()
+        setMsg(
+          r.ok
+            ? { tone: 'good', text: 'Vínculo salvo e qualidade consultada.' }
+            : { tone: 'warn', text: `Vínculo salvo, mas a Meta respondeu: ${r.error}` },
+        )
+      } else setMsg({ tone: 'good', text: 'Vínculo salvo.' })
+    })
+
+  const unlink = () =>
+    act('unlink', async () => {
+      if (!window.confirm('Remover o vínculo com a API oficial? Qualidade e disparo por template deixam de funcionar nesta linha.'))
+        return
+      await evolutionApi.patch(instance.id, { clear_meta_link: true })
+      setDraft({ pnid: '', waba: '', token: '' })
+      setRaw(null)
+      await onChanged()
+    })
+
+  return (
+    <details className="rounded-lg border border-ink-800 bg-ink-850" open={linked}>
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 text-xs text-ink-300">
+        <span>Qualidade do número (API oficial da Meta)</span>
+        {linked ? <QualityBadge rating={instance.quality_rating} /> : <Badge>sem vínculo</Badge>}
+      </summary>
+      <div className="space-y-3 px-3 pb-3">
+        {linked && (
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-ink-800 bg-ink-950 p-3">
+              <p className="text-[11px] text-ink-500">Qualidade</p>
+              <p className="mt-1">
+                {instance.quality_rating ? <QualityBadge rating={instance.quality_rating} /> : <span className="text-xs text-ink-500">—</span>}
+              </p>
+            </div>
+            <div className="rounded-lg border border-ink-800 bg-ink-950 p-3">
+              <p className="text-[11px] text-ink-500">Limite de envio</p>
+              <p className="mt-1 font-mono text-xs text-ink-200">
+                {instance.messaging_limit_tier ? TIER_LABEL[instance.messaging_limit_tier] ?? instance.messaging_limit_tier : '—'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-ink-800 bg-ink-950 p-3">
+              <p className="text-[11px] text-ink-500">Status na Meta</p>
+              <p className="mt-1">
+                {instance.meta_status ? (
+                  <Badge tone={status?.tone ?? 'neutral'}>{status?.label ?? instance.meta_status.toLowerCase()}</Badge>
+                ) : (
+                  <span className="text-xs text-ink-500">—</span>
+                )}
+              </p>
+            </div>
+          </div>
+        )}
+        {linked && q && <p className="text-[11px] leading-snug text-ink-400">{q.hint}</p>}
+        {linked && instance.quality_checked_at && (
+          <p className="text-[11px] text-ink-500">consultada em {when(instance.quality_checked_at)}</p>
+        )}
+        {instance.quality_error && <Banner tone="bad">{instance.quality_error}</Banner>}
+        {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
+
+        <p className="text-[11px] leading-snug text-ink-500">
+          A Evolution (WhatsApp Web) não tem indicador de qualidade — esse dado só existe na Meta, para número
+          registrado na Cloud API (coexistência App + API). Informe o <strong>Phone Number ID</strong> do WhatsApp
+          Manager (é o ID numérico, não o telefone). Com o vínculo, a aba de disparo também pode enviar
+          <strong> template aprovado pela API oficial</strong>.
+        </p>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <Field label="Phone Number ID (Meta)">
+            <Input value={draft.pnid} placeholder="1234567890123456" onChange={(e) => setDraft({ ...draft, pnid: e.target.value })} />
+          </Field>
+          <Field label="WABA ID" hint="Necessário para listar templates.">
+            <Input value={draft.waba} placeholder="opcional" onChange={(e) => setDraft({ ...draft, waba: e.target.value })} />
+          </Field>
+          <Field
+            label="Access Token"
+            hint={
+              instance.meta_access_token__set
+                ? `Salvo (${instance.meta_access_token__hint}). Em branco mantém.`
+                : 'Obrigatório: token do System User com acesso a este WABA.'
+            }
+          >
+            <Input
+              type="password"
+              value={draft.token}
+              placeholder={instance.meta_access_token__set ? '•••••••• (mantém o atual)' : ''}
+              onChange={(e) => setDraft({ ...draft, token: e.target.value })}
+            />
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="primary" disabled={busy !== null} onClick={save}>
+            {busy === 'save' ? 'salvando…' : 'Salvar vínculo'}
+          </Button>
+          {linked && (
+            <Button size="sm" disabled={busy !== null} onClick={check}>
+              {busy === 'check' ? 'consultando…' : 'Checar qualidade'}
+            </Button>
+          )}
+          {linked && (
+            <Button size="sm" variant="danger" disabled={busy !== null} onClick={unlink}>
+              desvincular
+            </Button>
+          )}
+        </div>
+
+        {raw?.raw && (
+          <details>
+            <summary className="cursor-pointer text-[11px] text-ink-500">Resposta crua da Meta</summary>
+            <Json value={raw.raw} max={200} />
+          </details>
+        )}
+      </div>
+    </details>
+  )
 }
 
 /** Formulário de cadastro/edição de uma instância. */
@@ -236,6 +445,7 @@ function InstanceCard({
       actions={
         <>
           <StateBadge state={instance.state} />
+          {instance.meta_linked && <QualityBadge rating={instance.quality_rating} />}
           {instance.is_default && <Badge tone="info">padrão</Badge>}
           {!instance.active && <Badge tone="warn">inativa</Badge>}
         </>
@@ -430,6 +640,8 @@ function InstanceCard({
             />
           </div>
         )}
+
+        <MetaQualityPanel instance={instance} onChanged={onChanged} />
 
         <details className="rounded-lg border border-ink-800 bg-ink-850">
           <summary className="cursor-pointer px-3 py-2 text-xs text-ink-300">Enviar mensagem de teste</summary>

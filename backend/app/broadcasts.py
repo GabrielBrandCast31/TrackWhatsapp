@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import campaigns as campaigns_service
+from app import meta_link
 from app import numbers as numbers_service
 from app import settings_store
 from app.db import SessionLocal
@@ -173,7 +174,29 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-async def audience(session: AsyncSession, number: WaNumber, cfg: dict, filters: dict) -> tuple[list[Contact], dict]:
+def channel_for(number: WaNumber, via: str | None) -> str:
+    """Canal de envio: o pedido (`via`) ou o da linha. Levanta se a linha nao suporta."""
+    line = number.channel or "evolution"
+    via = (via or "").strip() or line
+    if via not in ("evolution", "cloud"):
+        raise ValueError("Canal de envio inválido.")
+    if via == "evolution" and line != "evolution":
+        raise ValueError("Esta linha não está na Evolution.")
+    if via == "cloud" and not meta_link.has_meta(number):
+        raise ValueError("Vincule o Phone Number ID e o Access Token da Meta na linha para disparar pela API oficial.")
+    return via
+
+
+def send_cfg(global_cfg: dict, number: WaNumber, channel: str) -> dict:
+    """Config de envio. Linha Evolution saindo pela Cloud usa o vinculo Meta."""
+    if channel == "cloud":
+        return meta_link.cloud_cfg(global_cfg, number)
+    return numbers_service.effective_cfg(global_cfg, number)
+
+
+async def audience(
+    session: AsyncSession, number: WaNumber, cfg: dict, filters: dict, channel: str | None = None
+) -> tuple[list[Contact], dict]:
     """Contatos da linha que entram na campanha + quantos cairam em cada barreira.
 
     Filtros: `stages`, `channels` (meta_ads, google_ads, utm, organic, agenda),
@@ -217,7 +240,7 @@ async def audience(session: AsyncSession, number: WaNumber, cfg: dict, filters: 
     if channels or keys:
         known = await campaigns_service.campaigns_for(session, (c.source_id for c in rows))
 
-    channel = number.channel or "evolution"
+    channel = channel or number.channel or "evolution"
     out: list[Contact] = []
     dropped = {"opted_out": 0, "no_destination": 0, "recent": 0, "filtered": 0}
     for c in rows:
@@ -406,8 +429,9 @@ async def _drain() -> None:
                     progressed = True
                     continue
 
-                cfg = numbers_service.effective_cfg(global_cfg, number)
-                await _send_one(session, cfg, number.channel or "evolution", broadcast, record, contact)
+                channel = broadcast.via or number.channel or "evolution"
+                cfg = send_cfg(global_cfg, number, channel)
+                await _send_one(session, cfg, channel, broadcast, record, contact)
                 progressed = True
 
                 if record.status == "failed":

@@ -9,6 +9,7 @@ import {
   type Broadcast,
   type BroadcastDetail,
   type BroadcastMessage,
+  type SendVia,
   type WaTemplate,
 } from '../api'
 import { NO_NUMBER_MESSAGE, useNumber } from '../numberContext'
@@ -77,8 +78,23 @@ function Progress({ b }: { b: Broadcast }) {
 // nova campanha
 // ---------------------------------------------------------------------------
 
-function Composer({ numberId, channel, onCreated }: { numberId: number; channel: string; onCreated: () => void }) {
-  const cloud = channel !== 'evolution'
+function Composer({
+  numberId,
+  channel,
+  metaLinked,
+  onCreated,
+}: {
+  numberId: number
+  channel: string
+  /** linha Evolution vinculada ao mesmo número na Cloud API: pode disparar template oficial */
+  metaLinked: boolean
+  onCreated: () => void
+}) {
+  const evoLine = channel === 'evolution'
+  const [via, setVia] = useState<SendVia>(evoLine ? 'evolution' : 'cloud')
+  const cloud = !evoLine || via === 'cloud'
+  // so manda `via` quando difere do canal da linha
+  const viaParam: SendVia | undefined = evoLine && via === 'cloud' ? 'cloud' : undefined
   const [name, setName] = useState('')
   const [text, setText] = useState(EXAMPLE)
   const [footer, setFooter] = useState(true)
@@ -111,12 +127,12 @@ function Composer({ numberId, channel, onCreated }: { numberId: number; channel:
   useEffect(() => {
     const t = setTimeout(() => {
       broadcastApi
-        .audience(numberId, filters)
+        .audience(numberId, filters, viaParam)
         .then(setAudience)
         .catch(() => setAudience(null))
     }, 400)
     return () => clearTimeout(t)
-  }, [numberId, filters])
+  }, [numberId, filters, viaParam])
 
   const selected = templates.find((t) => t.name === template)
   useEffect(() => {
@@ -130,6 +146,7 @@ function Composer({ numberId, channel, onCreated }: { numberId: number; channel:
           template_name: template,
           template_language: selected?.language,
           template_params: params,
+          via: viaParam,
         }
       : { kind: 'text', text, opt_out_footer: footer }
 
@@ -217,10 +234,35 @@ function Composer({ numberId, channel, onCreated }: { numberId: number; channel:
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Black Friday — clientes antigos" />
           </Field>
 
+          {evoLine && metaLinked && (
+            <Field label="Enviar por" hint="O número é o mesmo; muda só o caminho da mensagem.">
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(
+                  [
+                    ['evolution', 'Evolution (WhatsApp Web)', 'texto livre · spintax · risco de bloqueio do aparelho'],
+                    ['cloud', 'API oficial da Meta', 'só template aprovado · conta na qualidade e no limite'],
+                  ] as const
+                ).map(([id, label, hint]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setVia(id)}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                      via === id ? 'border-wa-500/60 bg-wa-900/30' : 'border-ink-800 bg-ink-900 hover:border-ink-600'
+                    }`}
+                  >
+                    <span className={`block text-xs font-semibold ${via === id ? 'text-ink-100' : 'text-ink-300'}`}>{label}</span>
+                    <span className="mt-0.5 block text-[11px] text-ink-500">{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
+
           {cloud ? (
             <>
               <Banner tone="warn">
-                Linha da <strong>Cloud API</strong>: fora da janela de 24h a Meta só entrega <strong>template aprovado</strong>{' '}
+                {evoLine ? 'Envio pela' : 'Linha da'} <strong>Cloud API</strong>: fora da janela de 24h a Meta só entrega <strong>template aprovado</strong>{' '}
                 (categoria Marketing). Crie o template no WhatsApp Manager e ele aparece aqui.
               </Banner>
               <Field label="Template aprovado">
@@ -550,7 +592,13 @@ export default function Campaigns() {
   return (
     <div className="space-y-5">
       {numberId && current ? (
-        <Composer key={numberId} numberId={numberId} channel={current.channel || 'evolution'} onCreated={load} />
+        <Composer
+          key={numberId}
+          numberId={numberId}
+          channel={current.channel || 'evolution'}
+          metaLinked={!!current.meta_linked}
+          onCreated={load}
+        />
       ) : (
         <Banner tone="warn">{NO_NUMBER_MESSAGE}</Banner>
       )}
@@ -572,6 +620,7 @@ export default function Campaigns() {
                       <div className="flex items-center gap-2">
                         <p className="truncate text-sm font-semibold text-ink-100">{b.name}</p>
                         <Badge tone={STATUS[b.status].tone}>{STATUS[b.status].label}</Badge>
+                        {b.via === 'cloud' && <Badge tone="info">API oficial</Badge>}
                       </div>
                       <p className="mt-0.5 text-[11px] text-ink-500">
                         {when(b.created_at)}

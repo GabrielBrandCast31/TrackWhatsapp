@@ -73,6 +73,18 @@ class WaNumber(Base):
     display_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     verified_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     quality_rating: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # --- vinculo com a Cloud API oficial (linha Evolution) ---
+    # O mesmo numero pode estar na Evolution (WhatsApp Web) e registrado no WABA da
+    # Meta (coexistencia). Qualidade e limite de envio so existem do lado da Meta,
+    # e template aprovado so sai por la — por isso a linha Evolution pode guardar
+    # o Phone Number ID real da Meta. O token mora em `access_token` e o WABA em
+    # `business_account_id`, as mesmas colunas da linha Cloud.
+    meta_phone_number_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    messaging_limit_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)  # TIER_1K...
+    meta_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # CONNECTED | FLAGGED...
+    quality_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    quality_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -601,6 +613,9 @@ class Broadcast(Base):
     )
     name: Mapped[str] = mapped_column(String(160))
     kind: Mapped[str] = mapped_column(String(16), default="text")  # text | template
+    # por onde a campanha sai: "evolution" | "cloud". Vazio = canal da linha. Linha
+    # Evolution com vinculo Meta pode disparar template pela API oficial.
+    via: Mapped[str | None] = mapped_column(String(16), nullable=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     template_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     template_language: Mapped[str | None] = mapped_column(String(16), nullable=True)

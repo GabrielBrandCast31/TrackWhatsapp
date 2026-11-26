@@ -40,7 +40,12 @@ async def phone_number_info(cfg: dict) -> dict:
     pnid = cfg.get("wa_phone_number_id") or ""
     if not pnid:
         raise CloudAPIError("Phone Number ID nao configurado.")
-    params = {"fields": "id,display_phone_number,verified_name,quality_rating,platform_type"}
+    params = {
+        "fields": (
+            "id,display_phone_number,verified_name,quality_rating,platform_type,"
+            "messaging_limit_tier,status,name_status"
+        )
+    }
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(f"{_base(cfg)}/{pnid}", headers=_auth(cfg), params=params)
     data = _unwrap(resp)

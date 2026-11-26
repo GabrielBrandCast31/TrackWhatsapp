@@ -76,7 +76,15 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "webhook_token": "VARCHAR(64)",
         # chave publica da tag do site
         "site_key": "VARCHAR(32)",
+        # vinculo com a Cloud API: qualidade do numero e disparo por template
+        "meta_phone_number_id": "VARCHAR(64)",
+        "messaging_limit_tier": "VARCHAR(32)",
+        "meta_status": "VARCHAR(32)",
+        "quality_checked_at": "TIMESTAMP",
+        "quality_error": "TEXT",
     },
+    # campanha pode sair pela API oficial mesmo numa linha Evolution
+    "broadcasts": {"via": "VARCHAR(16)"},
     # qualificacao do formulario e o evento QualifiedLead
     "lead_forms": {"qualification": "JSON"},
     "form_responses": {

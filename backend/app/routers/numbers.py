@@ -59,6 +59,8 @@ def serialize_number(n: WaNumber, cfg: dict | None = None, counts: dict | None =
         "display_phone_number": n.display_phone_number,
         "verified_name": n.verified_name,
         "quality_rating": n.quality_rating,
+        "messaging_limit_tier": n.messaging_limit_tier,
+        "meta_status": n.meta_status,
         "last_checked_at": n.last_checked_at,
         "last_error": n.last_error,
         "active": n.active,
@@ -373,6 +375,10 @@ async def number_status(number_id: int, session: AsyncSession = Depends(get_sess
         number.display_phone_number = info.get("display_phone_number")
         number.verified_name = info.get("verified_name")
         number.quality_rating = info.get("quality_rating")
+        number.messaging_limit_tier = info.get("messaging_limit_tier")
+        number.meta_status = info.get("status")
+        number.quality_checked_at = datetime.now(timezone.utc)
+        number.quality_error = None
         number.last_error = None
     except Exception as exc:  # noqa: BLE001
         out["errors"].append(f"Numero: {exc}")
